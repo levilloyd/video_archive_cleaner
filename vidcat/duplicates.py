@@ -4,9 +4,7 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Callable
 
-from send2trash import send2trash
-
-from . import hashing
+from . import config, disposal, hashing
 from .tags import merge_tags
 
 Progress = Callable[[str, int, int], None]
@@ -92,15 +90,19 @@ def pick_default_keep(group: list[sqlite3.Row]) -> int:
     return min(enumerate(group), key=key)[0]
 
 
-def remove_copies(conn: sqlite3.Connection, keep_id: int, remove_ids: list[int]) -> list[str]:
-    """Move the given copies to the Trash and fold their tags/caption into the kept file.
+def remove_copies(
+    conn: sqlite3.Connection, keep_id: int, remove_ids: list[int], mode: str = "trash"
+) -> list[disposal.Disposal]:
+    """Remove the given copies and fold their tags/caption into the kept file.
 
-    Refuses to do anything unless the kept file still exists. Returns paths that were trashed.
+    `mode` is passed to `disposal.dispose`: "trash" (falling back to a holding folder on volumes that have no
+    Trash), "archive", or "delete". Refuses to do anything unless the kept file still exists. A copy that
+    can't be removed raises and is left in the catalog. Returns what happened to each removed file.
     """
     keep = conn.execute("SELECT * FROM videos WHERE id = ?", (keep_id,)).fetchone()
     if keep is None or not os.path.exists(keep["path"]):
         raise FileNotFoundError("The copy to keep is missing; nothing was removed.")
-    trashed = []
+    removed = []
     for rid in remove_ids:
         if rid == keep_id:
             continue
@@ -108,8 +110,7 @@ def remove_copies(conn: sqlite3.Connection, keep_id: int, remove_ids: list[int])
         if row is None:
             continue
         if os.path.exists(row["path"]):
-            send2trash(row["path"])
-            trashed.append(row["path"])
+            removed.append(disposal.dispose(row["path"], mode, config.DUPLICATES_DIR))
         merge_tags(conn, rid, keep_id)
         with conn:
             if row["caption"] and not keep["caption"]:
@@ -117,4 +118,4 @@ def remove_copies(conn: sqlite3.Connection, keep_id: int, remove_ids: list[int])
             if row["rotation"] and not keep["rotation"]:  # identical bytes, so the same turn is needed
                 conn.execute("UPDATE videos SET rotation = ? WHERE id = ?", (row["rotation"], keep_id))
             conn.execute("DELETE FROM videos WHERE id = ?", (rid,))
-    return trashed
+    return removed

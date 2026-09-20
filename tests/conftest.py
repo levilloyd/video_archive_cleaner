@@ -49,3 +49,14 @@ def conn(tmp_path):
 @pytest.fixture
 def thumbs(tmp_path):
     return tmp_path / "thumbs"
+
+
+@pytest.fixture(scope="session")
+def old_clips(tmp_path_factory):
+    """A real MPEG-2 file and a real WMV file, like the ones off an old camcorder/PC."""
+    d = tmp_path_factory.mktemp("old")
+    src = ["-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=2",
+           "-f", "lavfi", "-i", "sine=frequency=440:duration=2"]
+    for codecs, name in ((["-c:v", "mpeg2video", "-c:a", "mp2"], "a.mpg"), (["-c:v", "wmv2", "-c:a", "wmav2"], "b.wmv")):
+        subprocess.run(["ffmpeg", "-v", "error", "-y", *src, *codecs, str(d / name)], check=True)
+    return d

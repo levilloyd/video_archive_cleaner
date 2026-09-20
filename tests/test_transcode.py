@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from vidcat import cli, db, media, tags, transcode
+from vidcat import cli, db, disposal, media, tags, transcode
 from vidcat.transcode import Settings, TranscodeError
 
 runner = CliRunner()
@@ -17,17 +17,6 @@ FAST = Settings(preset="ultrafast")
 
 def ffmpeg(*args):
     subprocess.run(["ffmpeg", "-v", "error", "-y", *args], check=True)
-
-
-@pytest.fixture(scope="session")
-def old_clips(tmp_path_factory):
-    """A real MPEG-2 file and a real WMV file, like the ones off an old camcorder/PC."""
-    d = tmp_path_factory.mktemp("old")
-    src = ["-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=2",
-           "-f", "lavfi", "-i", "sine=frequency=440:duration=2"]
-    ffmpeg(*src, "-c:v", "mpeg2video", "-c:a", "mp2", str(d / "a.mpg"))
-    ffmpeg(*src, "-c:v", "wmv2", "-c:a", "wmav2", str(d / "b.wmv"))
-    return d
 
 
 @pytest.fixture
@@ -150,7 +139,7 @@ def test_cli_rejects_bad_options(tmp_path, old_lib):
     db_path = tmp_path / "c.db"
     run(db_path, "scan", str(old_lib))
     assert run(db_path, "transcode", "--codec", "vp9").exit_code == 2
-    assert run(db_path, "transcode", "--originals", "delete").exit_code == 2
+    assert run(db_path, "transcode", "--originals", "shred").exit_code == 2
 
 
 def test_cli_transcode_then_trash_originals(tmp_path, old_lib, monkeypatch):
@@ -174,7 +163,7 @@ def test_cli_transcode_then_trash_originals(tmp_path, old_lib, monkeypatch):
     new = conn.execute("SELECT * FROM videos WHERE name = '03_20_04 020.mp4'").fetchone()
     assert tags.tags_for(conn, [new["id"]])[new["id"]] == ["2004", "wedding"]   # tags followed
     assert new["caption"] == "Dancing" and new["rotation"] == 90   # same picture, same turn needed
-    assert new["date_source"] == "filename"   # still "day only, from the file name", not a made-up midnight
+    assert new["date_source"] == "filename"  # still "day only, from the file name", not a made-up midnight
     assert datetime.fromtimestamp(new["created_at"]).strftime("%Y-%m-%d") == "2004-03-20"
     kids_old = conn.execute("SELECT * FROM videos WHERE name = 'kids.wmv'").fetchone()
     kids_new = conn.execute("SELECT * FROM videos WHERE name = 'kids.mp4'").fetchone()
@@ -183,7 +172,7 @@ def test_cli_transcode_then_trash_originals(tmp_path, old_lib, monkeypatch):
 
     # 2) Re-run with trash: nothing is re-encoded, originals are trashed and their catalog rows dropped.
     trashed = []
-    monkeypatch.setattr(cli, "send2trash", lambda p: (trashed.append(Path(p).name), os.remove(p)))
+    monkeypatch.setattr(disposal, "send2trash", lambda p: (trashed.append(Path(p).name), os.remove(p)))
     mtimes = {p.name: p.stat().st_mtime_ns for p in old_lib.glob("*.mp4")}
     r = run(db_path, "transcode", "--originals", "trash")
     assert r.exit_code == 0, r.output
@@ -200,7 +189,7 @@ def test_cli_transcode_then_trash_originals(tmp_path, old_lib, monkeypatch):
 def test_cli_never_trashes_original_when_conversion_fails(tmp_path, old_lib, monkeypatch):
     db_path = tmp_path / "c.db"
     run(db_path, "scan", str(old_lib))
-    monkeypatch.setattr(cli, "send2trash", lambda p: pytest.fail("must not trash anything"))
+    monkeypatch.setattr(disposal, "send2trash", lambda p: pytest.fail("must not trash anything"))
     monkeypatch.setattr(transcode, "encode", lambda *a, **k: (_ for _ in ()).throw(TranscodeError("boom")))
     r = run(db_path, "transcode", "--originals", "trash")
     assert "Skipped" in r.output and "boom" in r.output

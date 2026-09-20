@@ -7,8 +7,12 @@ VIDEO_EXTS = {
     ".tod", ".asf", ".divx", ".dv",
 }
 
-# Directories never worth descending into (NAS thumbnail/recycle folders, etc.).
-SKIP_DIRS = {"@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information"}
+# Holding folders used when a volume has no Trash (see disposal.py). Created beside the files they came from.
+ORIGINALS_DIR = "Originals (vidcat)"
+DUPLICATES_DIR = "Duplicates (vidcat)"
+
+# Directories never worth descending into (NAS thumbnail/recycle folders, our own holding folders, etc.).
+SKIP_DIRS = {"@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information", ORIGINALS_DIR, DUPLICATES_DIR}
 
 # name_score is a 0-100 "how useful is this filename" score; below this is "bad".
 BAD_NAME_THRESHOLD = 50

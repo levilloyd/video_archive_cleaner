@@ -21,7 +21,7 @@ Your video files are never modified except by the rename and remove actions you 
 
 ```sh
 vidcat scan ~/Movies /Volumes/Archive/Videos   # add new/changed files; re-runs skip unchanged ones
-vidcat dupes [--dry-run]                       # interactively pick the one copy to keep; the rest go to the Trash
+vidcat dupes [--dry-run]                       # interactively pick the one copy to keep; the rest are removed (Trash, or see below)
 vidcat names [--ai]                            # find poorly named videos and rename them with suggestions
 vidcat undo-rename                             # revert the most recent rename
 vidcat transcode [--dry-run]                   # convert old .mpg/.wmv files to MP4 (H.264 + AAC)
@@ -37,6 +37,7 @@ Files are grouped by size, then a quick fingerprint (first/middle/last MiB), the
 byte-identical files are ever offered. For each set you choose which copy to keep (the best-named, earliest
 copy is pre-selected — press Enter to accept). The others are moved to the macOS Trash, and their tags are
 merged onto the copy you kept. Hard links to the same file are not treated as duplicates.
+See "Volumes without a Trash" below for network shares.
 
 ### Names
 A name is flagged as not useful when it's a camera default (`IMG_1234`, `MVI_0042`, `PXL_2023…`), a bare date
@@ -59,10 +60,23 @@ H.264; lower is better), and `--preset slow` for smaller output at the cost of t
   the file's modified time is preserved.
 - **Catalog carries over.** New files are cataloged automatically and inherit the original's tags and
   description.
-- **Originals.** `--originals ask` (default) offers to move them to the Trash when the run finishes (default
-  answer: no); `keep` and `trash` skip the question. Re-running is cheap: files that already have a good `.mp4`
-  are not re-encoded, so you can convert first, play a few results, and later run
-  `vidcat transcode --originals trash` to clean up.
+- **Originals.** `--originals ask` (default) offers to remove them when the run finishes (default answer:
+  keep); `keep`, `trash`, `archive` and `delete` skip the question (`delete` still asks you to confirm).
+  Re-running is cheap: files that already have a good `.mp4` are not re-encoded, so you can convert first, play
+  a few results, and later run `vidcat transcode --originals trash` to clean up.
+
+### Volumes without a Trash
+Network shares (SMB, NFS, AFP) usually have no Trash, and macOS's trash call can hang forever on them, waiting on
+a Finder dialog you can't see. vidcat detects this and never sends those files to the Trash. When something you
+remove (a duplicate, or an original after transcoding) is on such a volume you're offered:
+- **archive**: move it into a `Duplicates (vidcat)` / `Originals (vidcat)` folder beside the file. Instant and
+  undoable, but frees no space until you delete that folder yourself. vidcat ignores these folders when scanning.
+- **delete**: remove it permanently to reclaim space. You must type `delete` to confirm, and it's refused when
+  there's no terminal to confirm on.
+- **keep** (transcode) or **quit** (dupes).
+
+Files on local disks still go to the Trash as before, and a Trash call that doesn't answer within a minute is
+abandoned with an error instead of hanging.
 
 ### Web UI
 Search names/paths/tags/descriptions; sort by date, name, size, length; filter by tag, format, folder, date range,

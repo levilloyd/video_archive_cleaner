@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from vidcat import duplicates, hashing, names, queries, scanner, tags
+from vidcat import disposal, duplicates, hashing, names, queries, scanner, tags
 
 
 def do_scan(conn, lib, thumbs, **kw):
@@ -68,7 +68,7 @@ def test_removing_a_duplicate_keeps_the_rotation(conn, library, thumbs, monkeypa
     keep, drop = sorted(duplicates.find_duplicate_groups(conn)[0], key=lambda r: r["name"])  # Beach Trip, IMG_0001
     conn.execute("UPDATE videos SET rotation = 180 WHERE id = ?", (drop["id"],))
     conn.commit()
-    monkeypatch.setattr(duplicates, "send2trash", os.remove)
+    monkeypatch.setattr(disposal, "send2trash", os.remove)
     duplicates.remove_copies(conn, keep["id"], [drop["id"]])
     assert conn.execute("SELECT rotation FROM videos WHERE id = ?", (keep["id"],)).fetchone()[0] == 180
 
@@ -108,10 +108,10 @@ def test_find_duplicates_and_remove(conn, library, thumbs, monkeypatch):
     keep, drop = groups[0][keep_idx], groups[0][1 - keep_idx]
     tags.add_tags(conn, drop["id"], ["birthday"])
     trashed_paths = []
-    monkeypatch.setattr(duplicates, "send2trash", lambda p: (trashed_paths.append(p), os.remove(p)))
+    monkeypatch.setattr(disposal, "send2trash", lambda p: (trashed_paths.append(p), os.remove(p)))
     result = duplicates.remove_copies(conn, keep["id"], [drop["id"]])
 
-    assert result == [drop["path"]] == trashed_paths
+    assert [d.path for d in result] == [drop["path"]] == trashed_paths and result[0].action == "trashed"
     assert Path(keep["path"]).exists() and not Path(drop["path"]).exists()
     assert tags.tags_for(conn, [keep["id"]])[keep["id"]] == ["birthday"]  # tags merged onto the survivor
     assert conn.execute("SELECT COUNT(*) FROM videos WHERE id = ?", (drop["id"],)).fetchone()[0] == 0
@@ -123,7 +123,7 @@ def test_remove_copies_refuses_when_kept_file_is_gone(conn, library, thumbs, mon
     group = duplicates.find_duplicate_groups(conn)[0]
     keep, drop = group
     os.remove(keep["path"])
-    monkeypatch.setattr(duplicates, "send2trash", lambda p: pytest.fail("must not trash anything"))
+    monkeypatch.setattr(disposal, "send2trash", lambda p: pytest.fail("must not trash anything"))
     with pytest.raises(FileNotFoundError):
         duplicates.remove_copies(conn, keep["id"], [drop["id"]])
     assert Path(drop["path"]).exists()

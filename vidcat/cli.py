@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Optional
@@ -14,10 +15,9 @@ from rich.progress import (
 )
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
-from send2trash import send2trash
 
 from . import (
-    config, duplicates, media, names as names_mod, queries, scanner, tags as tags_mod, transcode as transcode_mod,
+    config, disposal, duplicates, media, names as names_mod, queries, scanner, tags as tags_mod, transcode as transcode_mod,
     vision,
 )
 from .db import connect
@@ -131,10 +131,19 @@ def dupes(
     reclaimable = sum(g[0]["size"] * (len(g) - 1) for g in groups)
     console.print(f"Found [bold]{len(groups)}[/bold] sets of identical files; removing extras would free "
                   f"[bold]{human_size(reclaimable)}[/bold].")
+    mode = "trash"
     if dry_run:
         console.print("[yellow]Dry run: nothing will be removed.[/yellow]")
+    else:
+        off = volumes_without_trash([r["path"] for g in groups for r in g])
+        if off:
+            mode = choose_duplicate_mode(off)
+            if mode is None:
+                console.print("Nothing was removed.")
+                return
 
     freed = removed = 0
+    outcomes: Counter = Counter()
     for n, group in enumerate(groups, 1):
         default = duplicates.pick_default_keep(group)
         while True:
@@ -152,6 +161,7 @@ def dupes(
             ).strip().lower()
             if answer in ("q", "quit"):
                 console.print(f"Removed {removed} file(s), freed {human_size(freed)}.")
+                print_disposal_summary(outcomes, config.DUPLICATES_DIR)
                 return
             if answer in ("s", "skip"):
                 break
@@ -169,17 +179,20 @@ def dupes(
                         console.print(f"  [yellow]would trash[/yellow] {r['path']}")
                     break
                 try:
-                    trashed = duplicates.remove_copies(conn, keep["id"], [r["id"] for r in drop])
+                    results = duplicates.remove_copies(conn, keep["id"], [r["id"] for r in drop], mode)
                 except Exception as e:  # report and continue with the next set
                     console.print(f"[red]Could not remove: {e}[/red]")
                     break
-                removed += len(trashed)
-                freed += keep["size"] * len(trashed)
-                for p in trashed:
-                    console.print(f"  [red]trashed[/red] {p}")
+                removed += len(results)
+                freed += keep["size"] * sum(d.action != "archived" for d in results)  # archived files still use space
+                for d in results:
+                    outcomes[d.action] += 1
+                    where = f" → {d.dest}" if d.dest else ""
+                    console.print(f"  [red]{d.action}[/red] {d.path}{where}")
                 break
             console.print("[red]Please enter a number from the list, s, o N, or q.[/red]")
     console.print(f"[green]Finished.[/green] Removed {removed} file(s), freed {human_size(freed)}.")
+    print_disposal_summary(outcomes, config.DUPLICATES_DIR)
 
 
 # --------------------------------------------------------------------------- names
@@ -326,7 +339,9 @@ def transcode_cmd(
     preset: Annotated[str, typer.Option(help="Encoder speed/size trade-off (ultrafast … veryslow).")] = "medium",
     deinterlace: Annotated[str, typer.Option(help="auto (detect), always, or never.")] = "auto",
     originals: Annotated[str, typer.Option(
-        help="After a verified conversion: ask (default), keep, or trash the original files.")] = "ask",
+        help="After a verified conversion: ask (default), keep, trash, archive (move into an 'Originals (vidcat)' "
+             "folder beside each file), or delete (permanent; needs interactive confirmation). Volumes with no "
+             "Trash, such as network shares, use the archive folder instead of the Trash.")] = "ask",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be converted; change nothing.")] = False,
     limit: Annotated[Optional[int], typer.Option(help="Convert at most this many files.")] = None,
 ):
@@ -335,10 +350,13 @@ def transcode_cmd(
     Each result is verified (readable, same length, audio present) before anything else happens.
     Re-running is safe: files that already have a good .mp4 beside them aren't re-encoded, so
     `vidcat transcode --originals trash` after checking the results will clean up the originals.
+
+    Network shares (SMB/NFS/AFP) usually have no Trash, so originals there are never sent to it: you're offered
+    a recoverable "Originals (vidcat)" folder beside each file, or permanent deletion.
     """
     for value, allowed, label in ((codec, transcode_mod.CODECS, "codec"), (preset, transcode_mod.PRESETS, "preset"),
                                   (deinterlace, ("auto", "always", "never"), "deinterlace"),
-                                  (originals, ("ask", "keep", "trash"), "originals")):
+                                  (originals, ("ask", "keep", "trash", "archive", "delete"), "originals")):
         if value not in allowed:
             raise typer.BadParameter(f"--{label} must be one of: {', '.join(allowed)}")
 
@@ -432,32 +450,92 @@ def transcode_cmd(
     console.print(f"[green]Converted {len(converted)} file(s)[/green]"
                   f"{f', {failed} skipped' if failed else ''}. Originals {human_size(before)}, MP4s {human_size(after)}.")
 
-    policy = originals
-    if policy == "ask":
+    mode = None  # what to do with the originals: "trash" | "archive" | "delete" | None (keep)
+    if originals == "ask":
         if sys.stdin.isatty() and converted:
             console.print("[dim]Tip: play a few of the new files first — you can also decide later by running "
                           "`vidcat transcode --originals trash`.[/dim]")
-            policy = "trash" if Confirm.ask(
-                f"Move the {len(converted)} original file(s) ({human_size(before)}) to the Trash now?", default=False
-            ) else "keep"
-        else:
-            policy = "keep"
-    if policy == "trash":
-        trashed = 0
-        for r, new in converted:
-            if not Path(new["path"]).exists():
-                continue  # never remove an original unless its replacement is on disk
-            try:
-                if Path(r["path"]).exists():
-                    send2trash(r["path"])
-                with conn:
-                    conn.execute("DELETE FROM videos WHERE id = ?", (r["id"],))
-                trashed += 1
-            except Exception as e:
-                console.print(f"[red]Couldn't trash {r['name']}: {e}[/red]")
-        console.print(f"Moved {trashed} original(s) to the Trash.")
-    else:
-        console.print("Originals kept. Run `vidcat transcode --originals trash` later to move them to the Trash.")
+            mode = choose_originals_mode([r["path"] for r, _ in converted], before)
+    elif originals == "delete":
+        if sys.stdin.isatty() and confirm_permanent_delete(len(converted), "original file(s)"):
+            mode = "delete"
+        elif not sys.stdin.isatty():
+            console.print("[yellow]Permanent deletion needs an interactive terminal to confirm; originals kept.[/yellow]")
+    elif originals in ("trash", "archive"):
+        mode = originals
+
+    if mode is None:
+        console.print("Originals kept. Run `vidcat transcode --originals trash` later to remove them.")
+        return
+    counts: Counter = Counter()
+    for r, new in converted:
+        if not Path(new["path"]).exists():
+            continue  # never remove an original unless its replacement is on disk
+        try:
+            if Path(r["path"]).exists():
+                counts[disposal.dispose(r["path"], mode, config.ORIGINALS_DIR).action] += 1
+            with conn:
+                conn.execute("DELETE FROM videos WHERE id = ?", (r["id"],))
+        except OSError as e:  # includes a Trash that didn't respond; the original stays where it is
+            console.print(f"[red]Couldn't remove {r['name']}: {e}[/red]")
+    print_disposal_summary(counts, config.ORIGINALS_DIR)
+
+
+def print_disposal_summary(counts: Counter, folder: str) -> None:
+    if counts["trashed"]:
+        console.print(f"Moved {counts['trashed']} file(s) to the Trash.")
+    if counts["archived"]:
+        console.print(f"Moved {counts['archived']} file(s) into \"{folder}\" folders beside where they were "
+                      f"(their volume has no Trash). Delete those folders when you're sure.")
+    if counts["deleted"]:
+        console.print(f"Permanently deleted {counts['deleted']} file(s).")
+
+
+def confirm_permanent_delete(count: int, noun: str) -> bool:
+    console.print(f"[bold red]This permanently deletes {count} {noun}. It cannot be undone.[/bold red]")
+    return Prompt.ask("Type 'delete' to confirm", default="") == "delete"
+
+
+def volumes_without_trash(paths: list[str]) -> list[str]:
+    return sorted({disposal.volume_label(p) or "(unknown volume)" for p in paths if not disposal.trash_available(p)})
+
+
+def choose_originals_mode(paths: list[str], total_bytes: int) -> str | None:
+    """Ask what to do with originals after a conversion. Returns "trash", "archive", "delete", or None (keep)."""
+    off = volumes_without_trash(paths)
+    if not off:
+        ok = Confirm.ask(f"Move the {len(paths)} original file(s) ({human_size(total_bytes)}) to the Trash now?",
+                         default=False)
+        return "trash" if ok else None
+    console.print(f"[yellow]{len(paths)} original file(s), {human_size(total_bytes)}. Some are on a volume with no "
+                  f"Trash: {', '.join(off)}[/yellow]")
+    console.print(f"  [bold]a[/bold]rchive  move them into an \"{config.ORIGINALS_DIR}\" folder beside each file "
+                  "(instant and undoable; frees no space; anything on a volume with a Trash goes there instead)")
+    console.print("  [bold]d[/bold]elete   remove them permanently (frees space; cannot be undone)")
+    console.print("  [bold]k[/bold]eep     leave them where they are")
+    answer = Prompt.ask("Choice", choices=["a", "d", "k"], default="k")
+    if answer == "a":
+        return "trash"  # Trash where a volume has one, the holding folder where it doesn't
+    if answer == "d" and confirm_permanent_delete(len(paths), "original file(s)"):
+        return "delete"
+    return None
+
+
+def choose_duplicate_mode(off: list[str]) -> str | None:
+    """Before removing duplicates from volumes with no Trash: how should 'remove' work? None means stop."""
+    console.print(f"[yellow]Some of these files are on a volume with no Trash: {', '.join(off)}[/yellow]")
+    console.print("Copies you remove from there can't go to the Trash. Choose what removing should do:")
+    console.print(f"  [bold]a[/bold]rchive  move removed copies into a \"{config.DUPLICATES_DIR}\" folder beside them "
+                  "(instant and undoable; frees no space; a volume with a Trash still uses it)")
+    console.print("  [bold]d[/bold]elete   remove them permanently (frees space; cannot be undone)")
+    console.print("  [bold]q[/bold]uit")
+    answer = Prompt.ask("Choice", choices=["a", "d", "q"], default="a")
+    if answer == "a":
+        return "trash"
+    if answer == "d":
+        return "delete" if Prompt.ask("Type 'delete' to permanently delete every copy you remove",
+                                      default="") == "delete" else None
+    return None
 
 
 # --------------------------------------------------------------------------- tags & listing
