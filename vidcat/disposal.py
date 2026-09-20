@@ -39,7 +39,7 @@ def mounts() -> tuple[tuple[str, str], ...]:
         _mounts_cache = ()
         if sys.platform == "darwin":
             try:
-                out = subprocess.run(["mount"], capture_output=True, text=True, timeout=10).stdout
+                out = subprocess.run(["mount"], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL).stdout
                 _mounts_cache = tuple(parse_mounts(out))
             except (OSError, subprocess.SubprocessError):
                 pass

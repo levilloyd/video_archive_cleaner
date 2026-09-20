@@ -40,7 +40,7 @@ def detect_interlaced(src: Path | str, frames: int = 300) -> bool:
         out = subprocess.run(
             ["ffmpeg", "-nostdin", "-hide_banner", "-i", str(src), "-vf", "idet",
              "-frames:v", str(frames), "-an", "-f", "null", "-"],
-            capture_output=True, text=True, errors="replace", timeout=180,
+            capture_output=True, text=True, errors="replace", timeout=180, stdin=subprocess.DEVNULL,
         )
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
@@ -75,7 +75,8 @@ def build_command(src: Path, dst: Path, settings: Settings, deinterlace: bool, c
 def encode(cmd: list[str], duration: float | None, on_progress: Callable[[float], None] | None = None) -> None:
     """Run ffmpeg, reporting progress as a 0..1 fraction. Raises TranscodeError with ffmpeg's message on failure."""
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, errors="replace")
     except FileNotFoundError as e:
         raise media.MediaToolError("ffmpeg not found on PATH. Install with: brew install ffmpeg") from e
     tail: deque[str] = deque(maxlen=15)

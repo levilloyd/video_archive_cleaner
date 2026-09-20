@@ -23,7 +23,7 @@ def probe(path: Path | str) -> dict | None:
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
-            capture_output=True, timeout=60, check=True,
+            capture_output=True, timeout=60, check=True, stdin=subprocess.DEVNULL,
         )
         return json.loads(out.stdout)
     except FileNotFoundError as e:
@@ -114,9 +114,9 @@ def make_thumbnail(path: Path | str, dest: Path, duration: float | None, width: 
     for t in ((duration or 0) * 0.1, 0):
         try:
             subprocess.run(
-                ["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.2f}", "-i", str(path),
+                ["ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", f"{t:.2f}", "-i", str(path),
                  "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "5", str(dest)],
-                capture_output=True, timeout=60, check=True,
+                capture_output=True, timeout=60, check=True, stdin=subprocess.DEVNULL,
             )
         except FileNotFoundError as e:
             raise MediaToolError("ffmpeg not found on PATH. Install with: brew install ffmpeg") from e
@@ -134,9 +134,9 @@ def extract_frames(path: Path | str, duration: float | None, count: int = 4, wid
         t = (duration or 0) * i / (count + 1)
         try:
             out = subprocess.run(
-                ["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(path), "-frames:v", "1",
+                ["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{t:.2f}", "-i", str(path), "-frames:v", "1",
                  "-vf", f"scale={width}:-2", "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "-"],
-                capture_output=True, timeout=60, check=True,
+                capture_output=True, timeout=60, check=True, stdin=subprocess.DEVNULL,
             )
         except FileNotFoundError as e:
             raise MediaToolError("ffmpeg not found on PATH. Install with: brew install ffmpeg") from e
