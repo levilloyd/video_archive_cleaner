@@ -1,6 +1,7 @@
 """Command-line interface: scan, dupes, names, tag, ls, serve."""
 import os
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Optional
@@ -8,11 +9,17 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
-from rich.prompt import Prompt
+from rich.progress import (
+    BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn,
+)
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
+from send2trash import send2trash
 
-from . import config, duplicates, media, names as names_mod, queries, scanner, tags as tags_mod, vision
+from . import (
+    config, duplicates, media, names as names_mod, queries, scanner, tags as tags_mod, transcode as transcode_mod,
+    vision,
+)
 from .db import connect
 
 app = typer.Typer(help="Manage a home video archive: scan, dedupe, rename, tag, browse.", no_args_is_help=True)
@@ -304,6 +311,151 @@ def undo_rename(ctx: typer.Context):
         console.print("Nothing to undo.")
     else:
         console.print(f"Restored {result[1]}")
+
+
+# --------------------------------------------------------------------------- transcode
+
+@app.command("transcode")
+def transcode_cmd(
+    ctx: typer.Context,
+    ext: Annotated[Optional[list[str]], typer.Option(
+        "--ext", help="Extension to convert (repeatable). Default: mpg, mpeg, mpe, wmv, asf.")] = None,
+    folder: Annotated[Optional[Path], typer.Option(help="Only videos under this folder.")] = None,
+    codec: Annotated[str, typer.Option(help="h264 (plays everywhere, incl. the web UI) or hevc (smaller files).")] = "h264",
+    crf: Annotated[Optional[int], typer.Option(help="Quality; lower = better and bigger. Default 20 (h264) / 24 (hevc).")] = None,
+    preset: Annotated[str, typer.Option(help="Encoder speed/size trade-off (ultrafast … veryslow).")] = "medium",
+    deinterlace: Annotated[str, typer.Option(help="auto (detect), always, or never.")] = "auto",
+    originals: Annotated[str, typer.Option(
+        help="After a verified conversion: ask (default), keep, or trash the original files.")] = "ask",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be converted; change nothing.")] = False,
+    limit: Annotated[Optional[int], typer.Option(help="Convert at most this many files.")] = None,
+):
+    """Convert old .mpg/.wmv files to MP4 (H.264 + AAC) next to the originals.
+
+    Each result is verified (readable, same length, audio present) before anything else happens.
+    Re-running is safe: files that already have a good .mp4 beside them aren't re-encoded, so
+    `vidcat transcode --originals trash` after checking the results will clean up the originals.
+    """
+    for value, allowed, label in ((codec, transcode_mod.CODECS, "codec"), (preset, transcode_mod.PRESETS, "preset"),
+                                  (deinterlace, ("auto", "always", "never"), "deinterlace"),
+                                  (originals, ("ask", "keep", "trash"), "originals")):
+        if value not in allowed:
+            raise typer.BadParameter(f"--{label} must be one of: {', '.join(allowed)}")
+
+    conn = open_db(ctx)
+    exts = [e.lower().lstrip(".") for e in (ext or transcode_mod.DEFAULT_EXTS)]
+    sql = f"SELECT * FROM videos WHERE missing = 0 AND ext IN ({','.join('?' * len(exts))})"
+    params: list = list(exts)
+    if folder:
+        root = str(folder.expanduser().resolve())
+        sql += " AND (dir = ? OR path LIKE ?)"
+        params += [root, root.rstrip("/") + "/%"]
+    rows = conn.execute(sql + " ORDER BY dir, name", params).fetchall()
+    if limit:
+        rows = rows[:limit]
+    if not rows:
+        console.print(f"No cataloged .{'/.'.join(exts)} videos to convert. (Run `vidcat scan` first?)")
+        return
+    console.print(f"[bold]{len(rows)}[/bold] video(s) to convert, {human_size(sum(r['size'] for r in rows))} in total.")
+
+    if dry_run:
+        for r in rows:
+            target = transcode_mod.output_path(Path(r["path"]))
+            if not Path(r["path"]).exists():
+                note = " [red](file not found; run `vidcat scan` to refresh the catalog)[/red]"
+            else:
+                note = " [yellow](already exists)[/yellow]" if target.exists() else ""
+            console.print(f"  {r['name']} → {target.name}{note}")
+        console.print("[yellow]Dry run: nothing was converted.[/yellow]")
+        return
+
+    try:
+        media.require_tools()
+    except media.MediaToolError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    settings = transcode_mod.Settings(codec=codec, crf=crf, preset=preset, deinterlace=deinterlace)
+    done, failed = [], 0
+    try:
+        for n, r in enumerate(rows, 1):
+            src = Path(r["path"])
+            if not src.exists():
+                continue
+            console.print(f"[{n}/{len(rows)}] [bold]{r['name']}[/bold]")
+            trusted = r["date_source"] in ("metadata", "filename")  # don't bake a mere copy date into the file
+            progress = Progress(TextColumn("  Encoding"), BarColumn(), TaskProgressColumn(), TimeRemainingColumn(),
+                                console=console, transient=True)
+            with progress:
+                task = progress.add_task("", total=1.0)
+                try:
+                    dst, encoded = transcode_mod.convert(
+                        src, settings, creation_time=r["created_at"] if trusted else None,
+                        on_progress=lambda f: progress.update(task, completed=f),
+                    )
+                except transcode_mod.TranscodeError as e:
+                    console.print(f"  [red]Skipped:[/red] {e}")
+                    failed += 1
+                    continue
+            note = f"{human_size(r['size'])} → {human_size(dst.stat().st_size)}" if encoded else "already converted"
+            console.print(f"  [green]✓[/green] {dst.name} ({note})")
+            done.append((r, dst))
+    except KeyboardInterrupt:
+        console.print("[yellow]Interrupted. Finished conversions are kept; the unfinished one was discarded.[/yellow]")
+
+    if not done:
+        console.print(f"Nothing converted{f', {failed} skipped' if failed else ''}.")
+        return
+
+    # Catalog the new files; they inherit tags and descriptions from the originals.
+    scanner.scan_files(conn, [dst for _, dst in done], config.thumbs_dir(ctx.obj))
+    converted = []
+    for r, dst in done:
+        new = conn.execute("SELECT * FROM videos WHERE path = ?", (str(dst.resolve()),)).fetchone()
+        if new is None:
+            console.print(f"[yellow]Couldn't catalog {dst.name}; keeping {r['name']}.[/yellow]")
+            continue
+        tags_mod.merge_tags(conn, r["id"], new["id"])
+        with conn:
+            if r["caption"] and not new["caption"]:
+                conn.execute("UPDATE videos SET caption = ? WHERE id = ?", (r["caption"], new["id"]))
+            if r["date_source"] == "filename":
+                # The date was embedded in the new file so it survives, but we only know the day, not a time.
+                conn.execute("UPDATE videos SET date_source = 'filename', created_at = ? WHERE id = ?",
+                             (r["created_at"], new["id"]))
+        converted.append((r, new))
+
+    before = sum(r["size"] for r, _ in converted)
+    after = sum(new["size"] for _, new in converted)
+    console.print(f"[green]Converted {len(converted)} file(s)[/green]"
+                  f"{f', {failed} skipped' if failed else ''}. Originals {human_size(before)}, MP4s {human_size(after)}.")
+
+    policy = originals
+    if policy == "ask":
+        if sys.stdin.isatty() and converted:
+            console.print("[dim]Tip: play a few of the new files first — you can also decide later by running "
+                          "`vidcat transcode --originals trash`.[/dim]")
+            policy = "trash" if Confirm.ask(
+                f"Move the {len(converted)} original file(s) ({human_size(before)}) to the Trash now?", default=False
+            ) else "keep"
+        else:
+            policy = "keep"
+    if policy == "trash":
+        trashed = 0
+        for r, new in converted:
+            if not Path(new["path"]).exists():
+                continue  # never remove an original unless its replacement is on disk
+            try:
+                if Path(r["path"]).exists():
+                    send2trash(r["path"])
+                with conn:
+                    conn.execute("DELETE FROM videos WHERE id = ?", (r["id"],))
+                trashed += 1
+            except Exception as e:
+                console.print(f"[red]Couldn't trash {r['name']}: {e}[/red]")
+        console.print(f"Moved {trashed} original(s) to the Trash.")
+    else:
+        console.print("Originals kept. Run `vidcat transcode --originals trash` later to move them to the Trash.")
 
 
 # --------------------------------------------------------------------------- tags & listing

@@ -24,6 +24,7 @@ vidcat scan ~/Movies /Volumes/Archive/Videos   # add new/changed files; re-runs 
 vidcat dupes [--dry-run]                       # interactively pick the one copy to keep; the rest go to the Trash
 vidcat names [--ai]                            # find poorly named videos and rename them with suggestions
 vidcat undo-rename                             # revert the most recent rename
+vidcat transcode [--dry-run]                   # convert old .mpg/.wmv files to MP4 (H.264 + AAC)
 vidcat tag add 12 family "2019 trip"           # tag by id (see `vidcat ls`), path, or file name
 vidcat tag remove 12 family
 vidcat tag list                                # all tags with counts
@@ -44,6 +45,24 @@ or number, a UUID/hash, or generic words like "Video" or "Untitled". Suggestions
 and (with `--ai`) a short description from sampled video frames. Frames are sent only to your local Ollama.
 At each prompt you can accept, edit, type your own, skip, open the video, or "keep name forever".
 Existing files are never overwritten (a ` (2)` suffix is added instead).
+
+### Transcoding
+`vidcat transcode` converts cataloged `.mpg`, `.mpeg`, `.mpe`, `.wmv` and `.asf` files (change with `--ext`) to
+`.mp4` next to the original: H.264 video + AAC audio, which plays everywhere, including the web UI. Use
+`--codec hevc` for smaller files (less browser support), `--crf` to trade quality for size (default 20 for
+H.264; lower is better), and `--preset slow` for smaller output at the cost of time.
+- **Safe by design.** Output is written to a hidden temp file and checked (readable, same length, audio
+  present) before it's moved into place. An existing `.mp4` is never overwritten, and originals are never
+  touched unless you say so.
+- **Looks right.** Interlaced footage (common from camcorders) is detected and deinterlaced
+  (`--deinterlace auto|always|never`). The capture date is written into the new file when it's trustworthy, and
+  the file's modified time is preserved.
+- **Catalog carries over.** New files are cataloged automatically and inherit the original's tags and
+  description.
+- **Originals.** `--originals ask` (default) offers to move them to the Trash when the run finishes (default
+  answer: no); `keep` and `trash` skip the question. Re-running is cheap: files that already have a good `.mp4`
+  are not re-encoded, so you can convert first, play a few results, and later run
+  `vidcat transcode --originals trash` to clean up.
 
 ### Web UI
 Search names/paths/tags/descriptions; sort by date, name, size, length; filter by tag, format, folder, date range,

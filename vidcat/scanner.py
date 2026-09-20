@@ -64,13 +64,43 @@ def scan(
     make_thumbs: bool = True,
     on_progress: Progress | None = None,
 ) -> ScanStats:
+    """Sync the catalog with everything under `roots` (also marks vanished files missing, detects moves)."""
     media.require_tools()
+    (on_progress or (lambda *_: None))("Finding files", 0, 0)
+    found = list(iter_video_files(r.resolve() for r in roots))
+    return _sync(conn, found, thumbs, workers, make_thumbs, on_progress, full=True)
+
+
+def scan_files(
+    conn: sqlite3.Connection,
+    files: list[Path],
+    thumbs: Path,
+    workers: int = 4,
+    make_thumbs: bool = True,
+    on_progress: Progress | None = None,
+) -> ScanStats:
+    """Add or refresh just these files; the rest of the catalog is left untouched."""
+    media.require_tools()
+    found = []
+    for f in files:
+        p = f.resolve()
+        st = p.stat()
+        found.append((str(p), st.st_size, st.st_mtime))
+    return _sync(conn, found, thumbs, workers, make_thumbs, on_progress, full=False)
+
+
+def _sync(
+    conn: sqlite3.Connection,
+    found: list[tuple[str, int, float]],
+    thumbs: Path,
+    workers: int,
+    make_thumbs: bool,
+    on_progress: Progress | None,
+    full: bool,
+) -> ScanStats:
     report = on_progress or (lambda *_: None)
     stats = ScanStats()
     now = int(time.time())
-
-    report("Finding files", 0, 0)
-    found = list(iter_video_files(r.resolve() for r in roots))
     existing = {r["path"]: r for r in conn.execute("SELECT * FROM videos")}
 
     todo, seen_paths = [], set()
@@ -137,14 +167,14 @@ def scan(
     conn.commit()
 
     # Anything in the catalog we didn't see this time: mark missing (unless its drive is just unmounted).
-    for path, row in existing.items():
+    for path, row in (existing.items() if full else ()):
         if path not in seen_paths and not row["missing"] and not os.path.exists(path):
             if not _volume_offline(path):
                 conn.execute("UPDATE videos SET missing = 1 WHERE id = ?", (row["id"],))
                 stats.missing += 1
     conn.commit()
 
-    stats.moved = _reconcile_moves(conn, new_rows)
+    stats.moved = _reconcile_moves(conn, new_rows) if full else 0
 
     if make_thumbs and thumb_jobs:
         def make(job):
