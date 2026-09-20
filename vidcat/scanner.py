@@ -77,7 +77,7 @@ def scan(
     for path, size, mtime in found:
         seen_paths.add(path)
         row = existing.get(path)
-        if row and row["size"] == size and abs(row["mtime"] - mtime) < 1e-6:
+        if row and row["size"] == size and abs(row["mtime"] - mtime) < 1e-6 and row["date_source"] is not None:
             stats.unchanged += 1
             if row["missing"]:
                 conn.execute("UPDATE videos SET missing = 0 WHERE id = ?", (row["id"],))
@@ -100,32 +100,40 @@ def scan(
             values = dict(
                 path=path, dir=os.path.dirname(path), name=name,
                 ext=os.path.splitext(name)[1].lower().lstrip("."), size=size, mtime=mtime,
-                created_at=info["created_at"], duration=info["duration"], width=info["width"],
-                height=info["height"], codec=info["codec"], name_score=name_quality(os.path.splitext(name)[0]),
-                scanned_at=now,
+                created_at=info["created_at"], date_source=info["date_source"], duration=info["duration"],
+                width=info["width"], height=info["height"], codec=info["codec"],
+                name_score=name_quality(os.path.splitext(name)[0]), scanned_at=now,
             )
             if row:
+                # A row is re-read either because the file changed or because an older catalog lacked
+                # some field. Only a real content change invalidates hashes and thumbnails.
+                content_changed = row["size"] != size or abs(row["mtime"] - mtime) >= 1e-6
+                reset = ", partial_hash=NULL, sha256=NULL" if content_changed else ""
+                # name_score is deliberately left alone unless the name changed, so "keep name forever" sticks.
                 conn.execute(
                     "UPDATE videos SET dir=:dir, name=:name, ext=:ext, size=:size, mtime=:mtime, "
-                    "created_at=:created_at, duration=:duration, width=:width, height=:height, "
-                    "codec=:codec, name_score=:name_score, partial_hash=NULL, sha256=NULL, "
-                    "missing=0, scanned_at=:scanned_at WHERE id=:id",
+                    "created_at=:created_at, date_source=:date_source, duration=:duration, width=:width, "
+                    "height=:height, codec=:codec, missing=0, scanned_at=:scanned_at"
+                    + (", name_score=:name_score" if content_changed or row["name"] != name else "")
+                    + reset + " WHERE id=:id",
                     {**values, "id": row["id"]},
                 )
                 video_id = row["id"]
                 stats.updated += 1
+                if content_changed:
+                    thumb_jobs.append((video_id, path, info["duration"]))
             else:
                 cur = conn.execute(
-                    "INSERT INTO videos (path, dir, name, ext, size, mtime, created_at, duration, width, "
-                    "height, codec, name_score, added_at, scanned_at) VALUES (:path, :dir, :name, :ext, "
-                    ":size, :mtime, :created_at, :duration, :width, :height, :codec, :name_score, "
-                    ":scanned_at, :scanned_at)",
+                    "INSERT INTO videos (path, dir, name, ext, size, mtime, created_at, date_source, duration, "
+                    "width, height, codec, name_score, added_at, scanned_at) VALUES (:path, :dir, :name, "
+                    ":ext, :size, :mtime, :created_at, :date_source, :duration, :width, :height, :codec, "
+                    ":name_score, :scanned_at, :scanned_at)",
                     values,
                 )
                 video_id = cur.lastrowid
                 new_rows.append({**values, "id": video_id})
                 stats.added += 1
-            thumb_jobs.append((video_id, path, info["duration"]))
+                thumb_jobs.append((video_id, path, info["duration"]))
     conn.commit()
 
     # Anything in the catalog we didn't see this time: mark missing (unless its drive is just unmounted).

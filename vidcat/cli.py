@@ -49,8 +49,12 @@ def human_duration(s: float | None) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
-def human_date(ts: int) -> str:
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+def human_date(ts: int, source: str | None = None) -> str:
+    """Format a capture date; dates that are only the file's modified time are marked with '~'."""
+    if source == "filename":
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+    text = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    return f"~{text}" if source == "mtime" else text
 
 
 def open_in_viewer(path: str) -> None:
@@ -132,7 +136,7 @@ def dupes(
                 table.add_column(col, overflow="fold")
             for i, r in enumerate(group):
                 mark = " [green](suggested)[/green]" if i == default else ""
-                table.add_row(str(i + 1), r["path"] + mark, human_date(r["created_at"]),
+                table.add_row(str(i + 1), r["path"] + mark, human_date(r["created_at"], r["date_source"]),
                               human_duration(r["duration"]), human_size(r["size"]))
             console.print(table)
             answer = Prompt.ask(
@@ -244,7 +248,7 @@ def names(
         while True:
             suggestion = names_mod.suggest_name(r, caption)
             info = (f"[bold]{r['name']}[/bold]\n{r['dir']}\n"
-                    f"{human_date(r['created_at'])} · {human_duration(r['duration'])} · {human_size(r['size'])}")
+                    f"{human_date(r['created_at'], r['date_source'])} · {human_duration(r['duration'])} · {human_size(r['size'])}")
             if caption:
                 info += f"\nAI description: {caption}"
             console.print(Panel(info, title=f"{n}/{len(rows)}", title_align="left"))
@@ -369,7 +373,7 @@ def ls(
     for col in ("ID", "Name", "Captured", "Length", "Tags"):
         table.add_column(col, overflow="fold")
     for v in res["items"]:
-        table.add_row(str(v["id"]), v["name"], human_date(v["created_at"]), human_duration(v["duration"]),
+        table.add_row(str(v["id"]), v["name"], human_date(v["created_at"], v["date_source"]), human_duration(v["duration"]),
                       ", ".join(v["tags"]))
     console.print(table)
     console.print(f"[dim]Showing {len(res['items'])} of {res['total']}[/dim]")

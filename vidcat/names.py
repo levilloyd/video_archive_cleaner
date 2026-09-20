@@ -80,20 +80,28 @@ def _folder_label(path: Path, home: Path | None = None) -> str | None:
 def suggest_name(video, caption: str | None = None) -> str:
     """Suggest a file name stem like '2019-07-04 Beach Trip - Kids Building Sandcastles'.
 
-    `video` is a mapping/row with `path` and `created_at`. Uses the capture date, a meaningful
-    parent folder, and (if provided) an AI caption.
+    `video` is a mapping/row with `path`, `created_at` and (optionally) `date_source`. Uses the capture
+    date, a meaningful parent folder, and (if provided) an AI caption. A date that is only the file's
+    modified time (often just the day it was copied) is left out when there's something better to say.
     """
     path = Path(video["path"])
     when = datetime.fromtimestamp(video["created_at"])
+    try:
+        source = video["date_source"]
+    except (KeyError, IndexError):
+        source = "metadata"
     folder = _folder_label(path)
     caption = sanitize_stem(caption) if caption else ""
-    parts = [when.strftime("%Y-%m-%d")]
+
+    parts = []
+    if source != "mtime" or not (folder or caption):
+        parts.append(when.strftime("%Y-%m-%d"))
     if folder:
         parts.append(folder)
     base = " ".join(parts)
     if caption:
-        base += f" - {caption}"
-    elif not folder:
+        base = f"{base} - {caption}" if base else caption
+    elif not folder and source != "filename":
         base += when.strftime(" %H-%M-%S")  # nothing descriptive: keep names unique by time
     return sanitize_stem(base)
 

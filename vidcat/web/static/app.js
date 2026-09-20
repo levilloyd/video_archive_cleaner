@@ -205,8 +205,11 @@ function openModal(index) {
   renderModalTags(v);
   const meta = $("meta");
   meta.replaceChildren();
+  const captured = v.date_source === "filename" ? `${fmtDate(v.created_at)} (from file name)`
+    : v.date_source === "mtime" ? `${fmtDateTime(v.created_at)} (file date — may just be when it was copied)`
+    : fmtDateTime(v.created_at);
   const rows = [
-    ["Captured", fmtDateTime(v.created_at)],
+    ["Captured", captured],
     ["Length", fmtDur(v.duration) || "unknown"],
     ["Size", fmtSize(v.size)],
     ["Resolution", v.width ? `${v.width}×${v.height}` : "unknown"],

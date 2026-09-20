@@ -1,4 +1,4 @@
-"""Thin wrappers around ffprobe/ffmpeg."""
+"""Thin wrappers around ffprobe/ffmpeg, plus capture-date detection."""
 import json
 import re
 import shutil
@@ -44,23 +44,43 @@ def _parse_date(value: str) -> int | None:
     return ts
 
 
-_NAME_DATE = re.compile(r"(?<!\d)((?:19|20)\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)")
+_NAME_DATE_YMD = re.compile(r"(?<!\d)((?:19|20)\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)")
+# 02_19_04, 2-19-2004, 02.19.04: separators are required so bare digit runs aren't misread as dates.
+_NAME_DATE_MDY = re.compile(r"(?<!\d)(\d{1,2})[-_.](\d{1,2})[-_.](\d{4}|\d{2})(?!\d)")
+
+
+def _valid_name_date(year: int, month: int, day: int) -> int | None:
+    try:
+        dt = datetime(year, month, day)
+    except ValueError:
+        return None
+    return int(dt.timestamp()) if 1950 <= year and dt.timestamp() <= time.time() + 86400 else None
 
 
 def date_from_filename(name: str) -> int | None:
-    m = _NAME_DATE.search(name)
-    if not m:
-        return None
-    try:
-        return int(datetime(int(m[1]), int(m[2]), int(m[3])).timestamp())
-    except ValueError:
-        return None
+    """Date embedded in a file name: YYYYMMDD / YYYY-MM-DD, or month-first M_D_YY / M_D_YYYY (US style).
+
+    The day-first reading is used only when month-first is impossible (e.g. 25_12_04).
+    """
+    if m := _NAME_DATE_YMD.search(name):
+        if ts := _valid_name_date(int(m[1]), int(m[2]), int(m[3])):
+            return ts
+    for m in _NAME_DATE_MDY.finditer(name):
+        a, b, y = int(m[1]), int(m[2]), m[3]
+        month, day = (a, b) if a <= 12 else (b, a)
+        if len(y) == 2:
+            year = 2000 + int(y) if int(y) <= datetime.now().year % 100 else 1900 + int(y)
+        else:
+            year = int(y)
+        if ts := _valid_name_date(year, month, day):
+            return ts
+    return None
 
 
 def parse_probe(data: dict | None, name: str, mtime: float) -> dict:
     """Extract catalog fields from ffprobe output (or defaults if probing failed)."""
     info = {"duration": None, "width": None, "height": None, "codec": None,
-            "created_at": None, "has_video": None}
+            "created_at": None, "date_source": None, "has_video": None}
     if data:
         streams = data.get("streams", [])
         video = next((s for s in streams if s.get("codec_type") == "video"), None)
@@ -79,10 +99,13 @@ def parse_probe(data: dict | None, name: str, mtime: float) -> dict:
         candidates += [s.get("tags", {}).get("creation_time") for s in streams]
         for c in candidates:
             if c and (ts := _parse_date(c)):
-                info["created_at"] = ts
+                info["created_at"], info["date_source"] = ts, "metadata"
                 break
     if info["created_at"] is None:
-        info["created_at"] = date_from_filename(name) or int(mtime)
+        if ts := date_from_filename(name):
+            info["created_at"], info["date_source"] = ts, "filename"
+        else:  # last resort; often just the day the file was copied
+            info["created_at"], info["date_source"] = int(mtime), "mtime"
     return info
 
 

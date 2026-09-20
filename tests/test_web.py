@@ -48,9 +48,9 @@ def test_rename_via_api(client):
 
 
 def test_suggest_name_without_ai(client):
-    vid = client.get("/api/videos").json()["items"][0]
+    vid = next(v for v in client.get("/api/videos").json()["items"] if v["date_source"] == "metadata")
     r = client.post(f"/api/videos/{vid['id']}/suggest-name").json()
-    assert r["suggestion"].startswith("20") and r["warning"] is None
+    assert r["suggestion"].startswith("2019-07-04") and r["warning"] is None
 
 
 def test_media_supports_range_requests(client):

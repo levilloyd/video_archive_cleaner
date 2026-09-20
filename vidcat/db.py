@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS videos (
     size         INTEGER NOT NULL,
     mtime        REAL NOT NULL,
     created_at   INTEGER NOT NULL,         -- epoch seconds (UTC): metadata date, else filename date, else mtime
-    duration     REAL,
+    date_source  TEXT,                     -- 'metadata' | 'filename' | 'mtime'; NULL = not yet determined
+    duration    REAL,
     width        INTEGER,
     height       INTEGER,
     codec        TEXT,
@@ -69,4 +70,14 @@ def connect(path: Path | str | None = None, init: bool = True, cross_thread: boo
     if init:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
+        _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring catalogs created by older versions up to date."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+    if "date_source" not in cols:
+        # Left NULL for existing rows; the next `vidcat scan` re-reads them to fill it in.
+        conn.execute("ALTER TABLE videos ADD COLUMN date_source TEXT")
+        conn.commit()
