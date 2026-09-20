@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Video Library</h1>
+    <input id="q" type="search" placeholder="Search names, tags, descriptions…" autocomplete="off" autofocus>
+    <label class="sort">Sort
+      <select id="sort">
+        <option value="date">Date captured</option>
+        <option value="name">Name</option>
+        <option value="size">Size</option>
+        <option value="duration">Length</option>
+        <option value="added">Date added</option>
+        <option value="path">Path</option>
+      </select>
+    </label>
+    <button id="order" type="button" title="Toggle sort direction">↓</button>
+  </header>
+
+  <div class="layout">
+    <aside id="filters">
+      <section>
+        <label class="check"><input type="checkbox" id="bad"> Needs a better name</label>
+        <label class="check"><input type="checkbox" id="dup"> Possible duplicates</label>
+      </section>
+      <section>
+        <h2>Date captured</h2>
+        <div class="row"><input type="date" id="dateFrom" aria-label="From date"><span>to</span><input type="date" id="dateTo" aria-label="To date"></div>
+      </section>
+      <section>
+        <h2>Length (minutes)</h2>
+        <div class="row"><input type="number" id="minDur" min="0" step="any" placeholder="min" aria-label="Minimum minutes"><span>to</span><input type="number" id="maxDur" min="0" step="any" placeholder="max" aria-label="Maximum minutes"></div>
+      </section>
+      <section>
+        <h2>Folder</h2>
+        <select id="folder"><option value="">All folders</option></select>
+      </section>
+      <section>
+        <h2>Format</h2>
+        <div id="exts" class="chips"></div>
+      </section>
+      <section>
+        <h2>Tags</h2>
+        <div id="tags" class="chips"></div>
+      </section>
+      <button id="clear" type="button" class="link">Clear all filters</button>
+    </aside>
+
+    <main>
+      <div id="summary" aria-live="polite"></div>
+      <div id="grid"></div>
+      <button id="more" type="button" hidden>Load more</button>
+    </main>
+  </div>
+
+  <dialog id="modal">
+    <div class="modal-body">
+      <button id="close" type="button" class="close" aria-label="Close">×</button>
+      <div class="player">
+        <video id="player" controls preload="metadata"></video>
+        <div id="playerError" hidden></div>
+      </div>
+      <div class="details">
+        <div class="field">
+          <label for="nameInput">File name <span class="ext" id="extLabel"></span></label>
+          <div class="row">
+            <input id="nameInput" type="text" spellcheck="false">
+            <button id="saveName" type="button">Rename</button>
+          </div>
+          <div class="row buttons">
+            <button id="suggest" type="button" class="secondary">Suggest name</button>
+            <button id="suggestAi" type="button" class="secondary">Suggest with AI</button>
+          </div>
+          <div id="status" class="status" aria-live="polite"></div>
+        </div>
+        <div class="field">
+          <label for="tagInput">Tags</label>
+          <div id="videoTags" class="chips"></div>
+          <div class="row">
+            <input id="tagInput" list="tagList" type="text" placeholder="Add a tag and press Enter">
+            <datalist id="tagList"></datalist>
+          </div>
+        </div>
+        <dl id="meta"></dl>
+        <div class="row buttons">
+          <button id="reveal" type="button" class="secondary">Show in Finder</button>
+          <a id="download" class="button secondary" download>Download</a>
+        </div>
+        <div class="row buttons nav">
+          <button id="prev" type="button" class="secondary">← Previous</button>
+          <button id="next" type="button" class="secondary">Next →</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

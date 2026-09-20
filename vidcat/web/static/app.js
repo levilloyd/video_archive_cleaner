@@ -1,0 +1,307 @@
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const c of children) node.append(c);
+  return node;
+}
+
+const state = {
+  q: "", sort: "date", order: "desc", tags: new Set(), exts: new Set(), folder: "",
+  dateFrom: "", dateTo: "", minDur: "", maxDur: "", bad: false, dup: false,
+  page: 1, pageSize: 60, items: [], total: 0, current: -1,
+};
+let requestId = 0;
+
+// ---------- formatting
+const fmtSize = (n) => {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(1)) + " " + units[i];
+};
+const fmtDur = (s) => {
+  if (!s) return "";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+};
+const fmtDate = (ts) => new Date(ts * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+const fmtDateTime = (ts) => new Date(ts * 1000).toLocaleString();
+const stem = (name) => name.replace(/\.[^.]+$/, "");
+
+async function api(path, options = {}) {
+  const opts = { ...options };
+  if (opts.body && typeof opts.body !== "string") {
+    opts.body = JSON.stringify(opts.body);
+    opts.headers = { "Content-Type": "application/json" };
+  }
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+// ---------- listing
+function queryString(page) {
+  const p = new URLSearchParams();
+  if (state.q) p.set("q", state.q);
+  p.set("sort", state.sort);
+  p.set("order", state.order);
+  p.set("page", page);
+  p.set("page_size", state.pageSize);
+  state.tags.forEach((t) => p.append("tag", t));
+  state.exts.forEach((e) => p.append("ext", e));
+  if (state.folder) p.set("folder", state.folder);
+  if (state.dateFrom) p.set("date_from", state.dateFrom);
+  if (state.dateTo) p.set("date_to", state.dateTo);
+  if (state.minDur !== "") p.set("min_dur", String(parseFloat(state.minDur) * 60));
+  if (state.maxDur !== "") p.set("max_dur", String(parseFloat(state.maxDur) * 60));
+  if (state.bad) p.set("bad_name", "true");
+  if (state.dup) p.set("duplicates", "true");
+  return p.toString();
+}
+
+async function load(reset) {
+  const id = ++requestId;
+  const page = reset ? 1 : state.page + 1;
+  let data;
+  try {
+    data = await api("/api/videos?" + queryString(page));
+  } catch (e) {
+    $("summary").textContent = "Error: " + e.message;
+    return;
+  }
+  if (id !== requestId) return; // a newer request superseded this one
+  state.page = data.page;
+  state.total = data.total;
+  state.items = reset ? data.items : state.items.concat(data.items);
+  renderGrid(reset ? 0 : state.items.length - data.items.length);
+}
+
+function renderGrid(fromIndex) {
+  const grid = $("grid");
+  if (fromIndex === 0) grid.replaceChildren();
+  if (state.items.length === 0) {
+    grid.append(el("div", { class: "empty" }, "No videos match. Try clearing filters, or run `vidcat scan` on a folder."));
+  }
+  for (let i = fromIndex; i < state.items.length; i++) grid.append(makeCard(state.items[i], i));
+  $("summary").textContent = `${state.total.toLocaleString()} video${state.total === 1 ? "" : "s"}`;
+  $("more").hidden = state.items.length >= state.total;
+}
+
+function makeCard(v, index) {
+  const thumb = el("div", { class: "thumb" });
+  const img = el("img", { src: `/thumb/${v.id}`, alt: "", loading: "lazy" });
+  img.addEventListener("error", () => { img.remove(); thumb.prepend(el("div", { class: "noimg" }, "No preview")); });
+  thumb.append(img);
+  if (v.duration) thumb.append(el("span", { class: "badge" }, fmtDur(v.duration)));
+
+  const info = el("div", { class: "info" }, el("div", { class: "name" }, v.name),
+    el("div", { class: "sub" }, `${fmtDate(v.created_at)} · ${fmtSize(v.size)}`));
+  const flags = el("div", { class: "flags" });
+  if (v.bad_name) flags.append(el("span", { class: "flag" }, "Needs better name"));
+  if (v.dup_count) flags.append(el("span", { class: "flag" }, `Possible duplicate (${v.dup_count})`));
+  if (flags.children.length) info.append(flags);
+  if (v.tags.length) info.append(el("div", { class: "chips" }, ...v.tags.map((t) => el("span", { class: "chip" }, t))));
+
+  const card = el("button", { class: "card", type: "button", "data-id": v.id }, thumb, info);
+  card.addEventListener("click", () => openModal(index));
+  return card;
+}
+
+// ---------- filters
+function toggleSet(set, value) { set.has(value) ? set.delete(value) : set.add(value); }
+
+function chip(label, count, on, onClick) {
+  const c = el("button", { class: "chip" + (on ? " on" : ""), type: "button", "aria-pressed": String(on) }, label);
+  if (count != null) c.append(el("small", {}, String(count)));
+  c.addEventListener("click", onClick);
+  return c;
+}
+
+async function loadFacets() {
+  const [tags, exts, folders] = await Promise.all([api("/api/tags"), api("/api/exts"), api("/api/folders")]);
+  $("tags").replaceChildren(...(tags.length ? tags.map((t) => chip(t.name, t.count, state.tags.has(t.name), () => {
+    toggleSet(state.tags, t.name); loadFacets(); load(true);
+  })) : [el("span", { class: "sub" }, "No tags yet")]));
+  $("exts").replaceChildren(...exts.map((e) => chip("." + e.ext, e.count, state.exts.has(e.ext), () => {
+    toggleSet(state.exts, e.ext); loadFacets(); load(true);
+  })));
+  const sel = $("folder");
+  sel.replaceChildren(el("option", { value: "" }, "All folders"));
+  for (const f of folders) {
+    const short = f.path.split("/").slice(-2).join("/");
+    const opt = el("option", { value: f.path, title: f.path }, `${short} (${f.count})`);
+    if (f.path === state.folder) opt.selected = true;
+    sel.append(opt);
+  }
+  $("tagList").replaceChildren(...tags.map((t) => el("option", { value: t.name })));
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+function bindFilters() {
+  const refresh = () => load(true);
+  $("q").addEventListener("input", debounce((e) => { state.q = e.target.value.trim(); refresh(); }, 250));
+  $("sort").addEventListener("change", (e) => { state.sort = e.target.value; refresh(); });
+  $("order").addEventListener("click", () => {
+    state.order = state.order === "desc" ? "asc" : "desc";
+    $("order").textContent = state.order === "desc" ? "↓" : "↑";
+    refresh();
+  });
+  $("bad").addEventListener("change", (e) => { state.bad = e.target.checked; refresh(); });
+  $("dup").addEventListener("change", (e) => { state.dup = e.target.checked; refresh(); });
+  for (const [id, key] of [["dateFrom", "dateFrom"], ["dateTo", "dateTo"], ["minDur", "minDur"], ["maxDur", "maxDur"]]) {
+    $(id).addEventListener("change", (e) => { state[key] = e.target.value; refresh(); });
+  }
+  $("folder").addEventListener("change", (e) => { state.folder = e.target.value; refresh(); });
+  $("more").addEventListener("click", () => load(false));
+  $("clear").addEventListener("click", () => {
+    Object.assign(state, { q: "", tags: new Set(), exts: new Set(), folder: "", dateFrom: "", dateTo: "", minDur: "", maxDur: "", bad: false, dup: false });
+    $("q").value = ""; $("bad").checked = false; $("dup").checked = false;
+    for (const id of ["dateFrom", "dateTo", "minDur", "maxDur"]) $(id).value = "";
+    loadFacets(); load(true);
+  });
+}
+
+// ---------- detail modal
+const modal = $("modal");
+
+function setStatus(msg, isError = false) {
+  const s = $("status");
+  s.textContent = msg;
+  s.classList.toggle("error", isError);
+}
+
+function openModal(index) {
+  state.current = index;
+  const v = state.items[index];
+  setStatus("");
+  const player = $("player");
+  $("playerError").hidden = true;
+  player.onerror = () => {
+    $("playerError").textContent = `Your browser can't play .${v.ext} files. Use "Show in Finder" or Download to open it in another app.`;
+    $("playerError").hidden = false;
+  };
+  player.src = `/media/${v.id}`;
+  $("nameInput").value = stem(v.name);
+  $("extLabel").textContent = "." + v.ext;
+  $("download").href = `/media/${v.id}`;
+  $("download").setAttribute("download", v.name);
+  renderModalTags(v);
+  const meta = $("meta");
+  meta.replaceChildren();
+  const rows = [
+    ["Captured", fmtDateTime(v.created_at)],
+    ["Length", fmtDur(v.duration) || "unknown"],
+    ["Size", fmtSize(v.size)],
+    ["Resolution", v.width ? `${v.width}×${v.height}` : "unknown"],
+    ["Codec", v.codec || "unknown"],
+    ["Location", v.dir],
+  ];
+  if (v.caption) rows.push(["Description", v.caption]);
+  if (v.dup_count) rows.push(["Duplicates", `${v.dup_count} other file(s) with the same size — run \`vidcat dupes\` to review`]);
+  for (const [k, val] of rows) meta.append(el("dt", {}, k), el("dd", {}, val));
+  $("prev").disabled = index <= 0;
+  $("next").disabled = index >= state.items.length - 1;
+  if (!modal.open) modal.showModal();
+}
+
+function renderModalTags(v) {
+  $("videoTags").replaceChildren(...v.tags.map((t) => {
+    const c = el("span", { class: "chip" }, t);
+    const x = el("button", { class: "x", type: "button", "aria-label": `Remove tag ${t}`, style: "background:none;border:0;color:inherit;padding:0 0 0 6px;cursor:pointer" }, "×");
+    x.addEventListener("click", () => mutateTags("DELETE", `?tag=${encodeURIComponent(t)}`));
+    c.append(x);
+    return c;
+  }));
+}
+
+function replaceCurrent(updated) {
+  state.items[state.current] = updated;
+  const card = document.querySelector(`.card[data-id="${updated.id}"]`);
+  if (card) card.replaceWith(makeCard(updated, state.current));
+}
+
+async function mutateTags(method, suffix = "", body) {
+  const v = state.items[state.current];
+  try {
+    const updated = await api(`/api/videos/${v.id}/tags${suffix}`, { method, body });
+    replaceCurrent(updated);
+    renderModalTags(updated);
+    loadFacets();
+  } catch (e) { setStatus(e.message, true); }
+}
+
+function bindModal() {
+  $("close").addEventListener("click", () => modal.close());
+  modal.addEventListener("close", () => { $("player").pause(); $("player").removeAttribute("src"); $("player").load(); });
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.close(); });
+  $("prev").addEventListener("click", () => state.current > 0 && openModal(state.current - 1));
+  $("next").addEventListener("click", () => state.current < state.items.length - 1 && openModal(state.current + 1));
+  modal.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT") return;
+    if (e.key === "ArrowLeft") $("prev").click();
+    if (e.key === "ArrowRight") $("next").click();
+  });
+
+  $("tagInput").addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const tags = e.target.value.split(",").map((t) => t.trim()).filter(Boolean);
+    if (!tags.length) return;
+    e.target.value = "";
+    await mutateTags("POST", "", { tags });
+  });
+
+  const rename = async () => {
+    const v = state.items[state.current];
+    const name = $("nameInput").value.trim();
+    if (!name || name === stem(v.name)) return;
+    try {
+      const updated = await api(`/api/videos/${v.id}`, { method: "PATCH", body: { name } });
+      replaceCurrent(updated);
+      $("nameInput").value = stem(updated.name);
+      setStatus(`Renamed to ${updated.name}`);
+    } catch (e) { setStatus(e.message, true); }
+  };
+  $("saveName").addEventListener("click", rename);
+  $("nameInput").addEventListener("keydown", (e) => { if (e.key === "Enter") rename(); });
+
+  const suggest = (ai) => async () => {
+    const v = state.items[state.current];
+    const buttons = [$("suggest"), $("suggestAi")];
+    buttons.forEach((b) => (b.disabled = true));
+    setStatus(ai ? "Asking the vision model… (can take a few seconds)" : "");
+    try {
+      const r = await api(`/api/videos/${v.id}/suggest-name?ai=${ai}`, { method: "POST" });
+      $("nameInput").value = r.suggestion;
+      if (r.caption && ai) { v.caption = r.caption; }
+      setStatus(r.warning || (ai ? "Suggestion ready — edit it, then Rename." : ""), Boolean(r.warning));
+    } catch (e) { setStatus(e.message, true); }
+    buttons.forEach((b) => (b.disabled = false));
+  };
+  $("suggest").addEventListener("click", suggest(false));
+  $("suggestAi").addEventListener("click", suggest(true));
+
+  $("reveal").addEventListener("click", () => api(`/api/videos/${state.items[state.current].id}/reveal`, { method: "POST" }).catch((e) => setStatus(e.message, true)));
+}
+
+bindFilters();
+bindModal();
+loadFacets();
+load(true);
