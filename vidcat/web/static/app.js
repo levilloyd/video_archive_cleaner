@@ -102,7 +102,7 @@ function renderGrid(fromIndex) {
 
 function makeCard(v, index) {
   const thumb = el("div", { class: "thumb" });
-  const img = el("img", { src: `/thumb/${v.id}`, alt: "", loading: "lazy" });
+  const img = el("img", { class: "rot", "data-rot": String(v.rotation || 0), src: `/thumb/${v.id}`, alt: "", loading: "lazy" });
   img.addEventListener("error", () => { img.remove(); thumb.prepend(el("div", { class: "noimg" }, "No preview")); });
   thumb.append(img);
   if (v.duration) thumb.append(el("span", { class: "badge" }, fmtDur(v.duration)));
@@ -197,7 +197,8 @@ function openModal(index) {
     $("playerError").textContent = `Your browser can't play .${v.ext} files. Use "Show in Finder" or Download to open it in another app.`;
     $("playerError").hidden = false;
   };
-  player.src = `/media/${v.id}`;
+  player.src = `/media/${v.id}#t=0.001`; // the fragment makes browsers show the first frame instead of black
+  applyPlayerRotation(v);
   $("nameInput").value = stem(v.name);
   $("extLabel").textContent = "." + v.ext;
   $("download").href = `/media/${v.id}`;
@@ -234,20 +235,71 @@ function renderModalTags(v) {
   }));
 }
 
-function replaceCurrent(updated) {
-  state.items[state.current] = updated;
+// Replace a video everywhere it's shown. Looked up by id, not by "current", because the user may have
+// moved to another video while the request was in flight.
+function replaceItem(updated) {
+  const index = state.items.findIndex((x) => x.id === updated.id);
+  if (index < 0) return false;
+  state.items[index] = updated;
   const card = document.querySelector(`.card[data-id="${updated.id}"]`);
-  if (card) card.replaceWith(makeCard(updated, state.current));
+  if (card) card.replaceWith(makeCard(updated, index));
+  return index === state.current;
 }
 
 async function mutateTags(method, suffix = "", body) {
   const v = state.items[state.current];
   try {
     const updated = await api(`/api/videos/${v.id}/tags${suffix}`, { method, body });
-    replaceCurrent(updated);
-    renderModalTags(updated);
+    if (replaceItem(updated)) renderModalTags(updated);
     loadFacets();
   } catch (e) { setStatus(e.message, true); }
+}
+
+// ---------- rotation (a viewing preference stored in the catalog; the file itself is never changed)
+function applyPlayerRotation(v) {
+  const player = $("player");
+  const rot = v.rotation || 0;
+  player.dataset.rot = String(rot);
+  // Prefer the browser's own dimensions (they include any rotation flag inside the file) over the catalog's.
+  const w = player.videoWidth || v.width || 16, h = player.videoHeight || v.height || 9;
+  const turned = rot === 90 || rot === 270;
+  $("stage").style.setProperty("--ar", String(turned ? h / w : w / h));
+  player.controls = rot === 0;          // native controls would be rotated along with the picture
+  $("customControls").hidden = rot === 0;
+}
+
+async function rotate(delta) {
+  const v = state.items[state.current];
+  if (!v) return;
+  const previous = v.rotation || 0;
+  v.rotation = (previous + delta + 360) % 360;
+  applyPlayerRotation(v);
+  replaceItem(v);
+  try {
+    await api(`/api/videos/${v.id}`, { method: "PATCH", body: { rotation: v.rotation } });
+  } catch (e) {
+    v.rotation = previous;
+    if (replaceItem(v)) applyPlayerRotation(v);
+    setStatus("Couldn't save rotation: " + e.message, true);
+  }
+}
+
+function bindCustomControls() {
+  const p = $("player");
+  const clock = (s) => fmtDur(s) || "0:00";
+  const sync = () => {
+    $("cPlay").textContent = p.paused ? "▶" : "⏸";
+    $("cMute").textContent = p.muted || p.volume === 0 ? "🔇" : "🔊";
+    if (p.duration) $("cSeek").value = String((p.currentTime / p.duration) * 1000);
+    $("cTime").textContent = `${clock(p.currentTime)} / ${clock(p.duration)}`;
+  };
+  ["play", "pause", "timeupdate", "loadedmetadata", "volumechange", "emptied"].forEach((ev) => p.addEventListener(ev, sync));
+  $("cPlay").addEventListener("click", () => (p.paused ? p.play() : p.pause()));
+  p.addEventListener("click", () => { if (!p.controls) $("cPlay").click(); });
+  $("cSeek").addEventListener("input", () => { if (p.duration) p.currentTime = (p.duration * $("cSeek").value) / 1000; });
+  $("cMute").addEventListener("click", () => { p.muted = !p.muted; });
+  $("cFull").addEventListener("click", () => (document.fullscreenElement ? document.exitFullscreen() : $("playerBox").requestFullscreen()));
+  p.addEventListener("loadedmetadata", () => { const v = state.items[state.current]; if (v) applyPlayerRotation(v); });
 }
 
 function bindModal() {
@@ -257,10 +309,14 @@ function bindModal() {
   $("prev").addEventListener("click", () => state.current > 0 && openModal(state.current - 1));
   $("next").addEventListener("click", () => state.current < state.items.length - 1 && openModal(state.current + 1));
   modal.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "INPUT") return;
+    if (e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "ArrowLeft") $("prev").click();
     if (e.key === "ArrowRight") $("next").click();
+    if (e.key === "r") rotate(90);
+    if (e.key === "R") rotate(-90);
   });
+  $("rotL").addEventListener("click", () => rotate(-90));
+  $("rotR").addEventListener("click", () => rotate(90));
 
   $("tagInput").addEventListener("keydown", async (e) => {
     if (e.key !== "Enter") return;
@@ -277,9 +333,10 @@ function bindModal() {
     if (!name || name === stem(v.name)) return;
     try {
       const updated = await api(`/api/videos/${v.id}`, { method: "PATCH", body: { name } });
-      replaceCurrent(updated);
-      $("nameInput").value = stem(updated.name);
-      setStatus(`Renamed to ${updated.name}`);
+      if (replaceItem(updated)) {
+        $("nameInput").value = stem(updated.name);
+        setStatus(`Renamed to ${updated.name}`);
+      }
     } catch (e) { setStatus(e.message, true); }
   };
   $("saveName").addEventListener("click", rename);
@@ -306,5 +363,11 @@ function bindModal() {
 
 bindFilters();
 bindModal();
+bindCustomControls();
 loadFacets();
-load(true);
+load(true).then(() => {
+  // Deep link: /#v12 opens video 12 (if it's on the first page of results).
+  const m = location.hash.match(/^#v(\d+)$/);
+  const index = m ? state.items.findIndex((v) => v.id === Number(m[1])) : -1;
+  if (index >= 0) openModal(index);
+});

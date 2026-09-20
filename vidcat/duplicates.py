@@ -114,5 +114,7 @@ def remove_copies(conn: sqlite3.Connection, keep_id: int, remove_ids: list[int])
         with conn:
             if row["caption"] and not keep["caption"]:
                 conn.execute("UPDATE videos SET caption = ? WHERE id = ?", (row["caption"], keep_id))
+            if row["rotation"] and not keep["rotation"]:  # identical bytes, so the same turn is needed
+                conn.execute("UPDATE videos SET rotation = ? WHERE id = ?", (row["rotation"], keep_id))
             conn.execute("DELETE FROM videos WHERE id = ?", (rid,))
     return trashed

@@ -62,8 +62,22 @@
   <dialog id="modal">
     <div class="modal-body">
       <button id="close" type="button" class="close" aria-label="Close">×</button>
-      <div class="player">
-        <video id="player" controls preload="metadata"></video>
+      <div class="player" id="playerBox">
+        <div class="stage" id="stage">
+          <video id="player" class="rot" controls preload="metadata" playsinline></video>
+        </div>
+        <div class="rotate-tools">
+          <button id="rotL" type="button" title="Rotate left (Shift+R)" aria-label="Rotate left">⟲</button>
+          <button id="rotR" type="button" title="Rotate right (R)" aria-label="Rotate right">⟳</button>
+        </div>
+        <!-- Native controls would rotate along with the picture, so rotated videos get these instead. -->
+        <div id="customControls" class="custom-controls" hidden>
+          <button id="cPlay" type="button" aria-label="Play or pause">▶</button>
+          <input id="cSeek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+          <span id="cTime">0:00 / 0:00</span>
+          <button id="cMute" type="button" aria-label="Mute">🔊</button>
+          <button id="cFull" type="button" aria-label="Full screen">⛶</button>
+        </div>
         <div id="playerError" hidden></div>
       </div>
       <div class="details">

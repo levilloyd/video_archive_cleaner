@@ -118,6 +118,26 @@ def test_old_catalog_is_migrated_and_refreshed_by_rescan(tmp_path, clip_dir, thu
     assert scanner.scan(conn, [lib], thumbs).unchanged == 1  # and it settles
 
 
+def test_catalog_without_rotation_column_is_migrated(tmp_path):
+    path = tmp_path / "old.db"
+    conn = db.connect(path)
+    conn.execute(
+        "INSERT INTO videos (path, dir, name, ext, size, mtime, created_at, added_at, scanned_at) "
+        "VALUES ('/x/a.mp4', '/x', 'a.mp4', 'mp4', 1, 1, 1, 1, 1)"
+    )
+    conn.commit()
+    conn.execute("ALTER TABLE videos DROP COLUMN rotation")   # what a catalog from before this feature looks like
+    conn.commit()
+    conn.close()
+
+    conn = db.connect(path)
+    assert conn.execute("SELECT rotation FROM videos").fetchone()[0] == 0   # existing rows: not rotated
+    conn.execute("UPDATE videos SET rotation = 90")
+    conn.commit()
+    conn.close()
+    assert db.connect(path).execute("SELECT rotation FROM videos").fetchone()[0] == 90  # and reconnecting is a no-op
+
+
 def test_keep_name_forever_survives_a_metadata_refresh(conn, tmp_path, clip_dir, thumbs):
     import shutil
     lib = tmp_path / "lib"

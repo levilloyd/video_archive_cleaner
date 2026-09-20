@@ -35,7 +35,7 @@ def _local_epoch(d: str, end_of_day: bool = False) -> int:
 def item_from_row(row: sqlite3.Row, tags: list[str]) -> dict:
     d = {k: row[k] for k in (
         "id", "path", "dir", "name", "ext", "size", "created_at", "date_source", "duration", "width", "height",
-        "codec", "name_score", "caption",
+        "codec", "name_score", "caption", "rotation",
     )}
     d["bad_name"] = row["name_score"] < config.BAD_NAME_THRESHOLD
     d["dup_count"] = row["dup_count"]

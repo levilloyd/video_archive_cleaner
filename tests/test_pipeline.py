@@ -44,6 +44,35 @@ def test_scan_marks_missing_and_detects_moves(conn, library, thumbs):
     assert queries.search_videos(conn)["total"] == 2
 
 
+def test_rotation_survives_rescan_change_and_move(conn, library, thumbs):
+    do_scan(conn, library, thumbs)
+    row = conn.execute("SELECT * FROM videos WHERE name = 'MVI_0002.mp4'").fetchone()
+    conn.execute("UPDATE videos SET rotation = 90 WHERE id = ?", (row["id"],))
+    conn.commit()
+    path = Path(row["path"])
+
+    os.utime(path, (1_000_000_000, 1_000_000_000))  # looks like a changed file: re-read from scratch
+    assert do_scan(conn, library, thumbs).updated == 1
+    assert conn.execute("SELECT rotation FROM videos WHERE id = ?", (row["id"],)).fetchone()[0] == 90
+
+    dest = library / "Elsewhere"
+    dest.mkdir()
+    os.rename(path, dest / path.name)                # moved: a new row is made, then reconciled with the old
+    assert do_scan(conn, library, thumbs).moved == 1
+    moved = conn.execute("SELECT * FROM videos WHERE name = 'MVI_0002.mp4'").fetchone()
+    assert moved["path"].endswith("Elsewhere/MVI_0002.mp4") and moved["rotation"] == 90
+
+
+def test_removing_a_duplicate_keeps_the_rotation(conn, library, thumbs, monkeypatch):
+    do_scan(conn, library, thumbs)
+    keep, drop = sorted(duplicates.find_duplicate_groups(conn)[0], key=lambda r: r["name"])  # Beach Trip, IMG_0001
+    conn.execute("UPDATE videos SET rotation = 180 WHERE id = ?", (drop["id"],))
+    conn.commit()
+    monkeypatch.setattr(duplicates, "send2trash", os.remove)
+    duplicates.remove_copies(conn, keep["id"], [drop["id"]])
+    assert conn.execute("SELECT rotation FROM videos WHERE id = ?", (keep["id"],)).fetchone()[0] == 180
+
+
 def test_scan_ignores_hidden_and_other_files_but_keeps_corrupt_videos(conn, tmp_path, thumbs):
     lib = tmp_path / "lib"
     lib.mkdir()

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -45,6 +47,29 @@ def test_rename_via_api(client):
     assert r.status_code == 200 and r.json()["name"] == "Sunset Pier.mp4" and not r.json()["bad_name"]
     assert client.patch(f"/api/videos/{vid['id']}", json={"name": "///"}).status_code == 409
     assert client.patch("/api/videos/99999", json={"name": "x"}).status_code == 404
+
+
+def test_rotation_is_saved_validated_and_leaves_the_file_alone(client, library):
+    items = client.get("/api/videos").json()["items"]
+    vid = items[0]
+    assert vid["rotation"] == 0
+    before = Path(vid["path"]).read_bytes()
+
+    for turn in (90, 180, 270, 0):
+        r = client.patch(f"/api/videos/{vid['id']}", json={"rotation": turn})
+        assert r.status_code == 200 and r.json()["rotation"] == turn
+    client.patch(f"/api/videos/{vid['id']}", json={"rotation": 270})
+
+    assert client.get(f"/api/videos/{vid['id']}").json()["rotation"] == 270
+    listed = {v["id"]: v["rotation"] for v in client.get("/api/videos").json()["items"]}
+    assert listed[vid["id"]] == 270 and sorted(set(listed.values())) == [0, 270]  # only that one video changed
+    assert Path(vid["path"]).read_bytes() == before
+
+    for bad in (45, -90, 360, "left"):
+        assert client.patch(f"/api/videos/{vid['id']}", json={"rotation": bad}).status_code == 422
+    # Changing other fields doesn't disturb it.
+    r = client.patch(f"/api/videos/{vid['id']}", json={"caption": "hello"}).json()
+    assert r["rotation"] == 270 and r["caption"] == "hello"
 
 
 def test_suggest_name_without_ai(client):

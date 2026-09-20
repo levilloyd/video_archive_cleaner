@@ -77,8 +77,19 @@ aside select { width: 100%; }
   cursor: pointer; text-align: left; padding: 0; color: inherit; display: flex; flex-direction: column;
 }
 .card:hover { border-color: var(--accent); }
-.thumb { position: relative; aspect-ratio: 16 / 9; background: #000; }
-.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb { position: relative; aspect-ratio: 16 / 9; background: #000; container-type: size; overflow: hidden; }
+
+/* Viewing rotation. A 90/270 turn swaps the element's width and height (measured against the container) so
+   the rotated picture still fits the box; cqw/cqh are the container's width/height. */
+.rot {
+  position: absolute; left: 50%; top: 50%; width: 100cqw; height: 100cqh; object-fit: contain;
+  transform: translate(-50%, -50%) rotate(var(--rot, 0deg));
+}
+.rot[data-rot="90"] { --rot: 90deg; width: 100cqh; height: 100cqw; }
+.rot[data-rot="180"] { --rot: 180deg; }
+.rot[data-rot="270"] { --rot: 270deg; width: 100cqh; height: 100cqw; }
+.thumb img.rot { object-fit: cover; }
+.thumb img.rot[data-rot="90"], .thumb img.rot[data-rot="270"] { object-fit: contain; }
 .thumb .noimg { position: absolute; inset: 0; display: grid; place-items: center; color: #888; font-size: 13px; }
 .badge {
   position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.75); color: #fff;
@@ -97,8 +108,19 @@ dialog { border: 1px solid var(--border); border-radius: 12px; padding: 0; backg
 dialog::backdrop { background: rgba(0,0,0,.6); }
 .modal-body { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); position: relative; }
 .close { position: absolute; top: 6px; right: 8px; z-index: 2; background: rgba(0,0,0,.55); color: #fff; width: 32px; height: 32px; padding: 0; font-size: 20px; line-height: 1; border-radius: 50%; }
-.player { background: #000; display: flex; align-items: center; justify-content: center; min-height: 260px; position: relative; }
-.player video { width: 100%; max-height: 80vh; display: block; }
+.player { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 260px; position: relative; }
+.stage {
+  --ar: 1.7778; position: relative; container-type: size; aspect-ratio: var(--ar);
+  width: min(100%, calc(80vh * var(--ar)));
+}
+.rotate-tools { position: absolute; top: 6px; left: 8px; z-index: 2; display: flex; gap: 6px; }
+.rotate-tools button { background: rgba(0,0,0,.55); color: #fff; width: 32px; height: 32px; padding: 0; font-size: 18px; line-height: 1; border-radius: 50%; }
+.rotate-tools button:hover, .close:hover { background: rgba(0,0,0,.8); }
+.custom-controls { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #111; color: #eee; font-size: 13px; }
+.custom-controls button { background: none; color: inherit; padding: 2px 6px; font-size: 16px; }
+.custom-controls input[type=range] { flex: 1; accent-color: var(--accent); }
+.custom-controls span { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.player:fullscreen .stage { width: min(100vw, calc((100vh - 48px) * var(--ar))); }
 #playerError { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: #ddd; background: #000; }
 .details { padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow: auto; max-height: 90vh; }
 .field label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }

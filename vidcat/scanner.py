@@ -206,8 +206,8 @@ def _reconcile_moves(conn: sqlite3.Connection, new_rows: list[dict]) -> int:
             conn.execute("UPDATE OR IGNORE video_tags SET video_id = ? WHERE video_id = ?", (new["id"], old["id"]))
             conn.execute("UPDATE rename_history SET video_id = ? WHERE video_id = ?", (new["id"], old["id"]))
             conn.execute(
-                "UPDATE videos SET caption = ?, partial_hash = ?, sha256 = ?, added_at = ? WHERE id = ?",
-                (old["caption"], old["partial_hash"], old["sha256"], old["added_at"], new["id"]),
+                "UPDATE videos SET caption = ?, rotation = ?, partial_hash = ?, sha256 = ?, added_at = ? WHERE id = ?",
+                (old["caption"], old["rotation"], old["partial_hash"], old["sha256"], old["added_at"], new["id"]),
             )
             conn.execute("DELETE FROM videos WHERE id = ?", (old["id"],))
         moved += 1

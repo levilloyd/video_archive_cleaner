@@ -2,6 +2,7 @@
 import mimetypes
 import subprocess
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -17,9 +18,10 @@ STATIC = Path(__file__).parent / "static"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]", "testserver"}
 
 
-class RenameBody(BaseModel):
+class UpdateBody(BaseModel):
     name: str | None = None
     caption: str | None = None
+    rotation: Literal[0, 90, 180, 270] | None = None  # clockwise turn applied when viewing; the file isn't changed
 
 
 class TagsBody(BaseModel):
@@ -91,11 +93,14 @@ def create_app(db: Path | str | None = None, allow_any_host: bool = False) -> Fa
         return video_or_404(conn, video_id)
 
     @app.patch("/api/videos/{video_id}")
-    def update_video(video_id: int, body: RenameBody, conn=Depends(get_conn)):
+    def update_video(video_id: int, body: UpdateBody, conn=Depends(get_conn)):
         video_or_404(conn, video_id)
         if body.caption is not None:
             with conn:
                 conn.execute("UPDATE videos SET caption = ? WHERE id = ?", (body.caption.strip() or None, video_id))
+        if body.rotation is not None:
+            with conn:
+                conn.execute("UPDATE videos SET rotation = ? WHERE id = ?", (body.rotation, video_id))
         if body.name is not None:
             try:
                 names.rename_video(conn, video_id, body.name)

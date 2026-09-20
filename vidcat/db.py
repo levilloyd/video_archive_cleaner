@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS videos (
     sha256       TEXT,
     name_score   INTEGER NOT NULL DEFAULT 100,
     caption      TEXT,
+    rotation     INTEGER NOT NULL DEFAULT 0,  -- extra clockwise turn applied when viewing: 0, 90, 180 or 270
     missing      INTEGER NOT NULL DEFAULT 0,
     added_at     INTEGER NOT NULL,
     scanned_at   INTEGER NOT NULL
@@ -80,4 +81,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "date_source" not in cols:
         # Left NULL for existing rows; the next `vidcat scan` re-reads them to fill it in.
         conn.execute("ALTER TABLE videos ADD COLUMN date_source TEXT")
-        conn.commit()
+    if "rotation" not in cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0")
+    conn.commit()

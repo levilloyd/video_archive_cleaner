@@ -159,7 +159,7 @@ def test_cli_transcode_then_trash_originals(tmp_path, old_lib, monkeypatch):
     conn = db.connect(db_path)
     orig = {r["name"]: r["id"] for r in conn.execute("SELECT id, name FROM videos")}
     tags.add_tags(conn, orig["03_20_04 020.mpg"], ["wedding", "2004"])
-    conn.execute("UPDATE videos SET caption = 'Dancing' WHERE id = ?", (orig["03_20_04 020.mpg"],))
+    conn.execute("UPDATE videos SET caption = 'Dancing', rotation = 90 WHERE id = ?", (orig["03_20_04 020.mpg"],))
     conn.commit()
     conn.close()
 
@@ -173,7 +173,7 @@ def test_cli_transcode_then_trash_originals(tmp_path, old_lib, monkeypatch):
     conn = db.connect(db_path)
     new = conn.execute("SELECT * FROM videos WHERE name = '03_20_04 020.mp4'").fetchone()
     assert tags.tags_for(conn, [new["id"]])[new["id"]] == ["2004", "wedding"]   # tags followed
-    assert new["caption"] == "Dancing"
+    assert new["caption"] == "Dancing" and new["rotation"] == 90   # same picture, same turn needed
     assert new["date_source"] == "filename"   # still "day only, from the file name", not a made-up midnight
     assert datetime.fromtimestamp(new["created_at"]).strftime("%Y-%m-%d") == "2004-03-20"
     kids_old = conn.execute("SELECT * FROM videos WHERE name = 'kids.wmv'").fetchone()

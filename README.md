@@ -68,8 +68,14 @@ H.264; lower is better), and `--preset slow` for smaller output at the cost of t
 Search names/paths/tags/descriptions; sort by date, name, size, length; filter by tag, format, folder, date range,
 length, "needs a better name", and "possible duplicates". Click a video to play it, edit its tags, or rename it
 (with the same suggestions, including AI). Browsers can't play every format (AVI, MTS, WMV…); for those use
-"Show in Finder" or Download. The server only listens on localhost and rejects foreign Host/Origin headers,
-because it can rename files and has no login.
+"Show in Finder" or Download (or convert them with `vidcat transcode`). The server only listens on localhost and
+rejects foreign Host/Origin headers, because it can rename files and has no login.
+
+**Rotating.** Videos shot sideways can be turned in the player with the ⟲ / ⟳ buttons, or the `Shift+R` / `R`
+keys. It's a viewing setting saved in the catalog: it applies to the player and the thumbnail, survives rescans,
+moves, transcoding and duplicate removal, and never modifies the video file. Turned videos use a simple built-in
+control bar (play, seek, mute, full screen) because the browser's own controls would rotate with the picture.
+`/#v12` in the address bar opens video 12 directly.
 
 ## Tests
 

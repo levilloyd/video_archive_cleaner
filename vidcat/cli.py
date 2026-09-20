@@ -419,6 +419,8 @@ def transcode_cmd(
         with conn:
             if r["caption"] and not new["caption"]:
                 conn.execute("UPDATE videos SET caption = ? WHERE id = ?", (r["caption"], new["id"]))
+            if r["rotation"]:  # same picture, so it needs the same turn to look upright
+                conn.execute("UPDATE videos SET rotation = ? WHERE id = ?", (r["rotation"], new["id"]))
             if r["date_source"] == "filename":
                 # The date was embedded in the new file so it survives, but we only know the day, not a time.
                 conn.execute("UPDATE videos SET date_source = 'filename', created_at = ? WHERE id = ?",
