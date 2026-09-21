@@ -332,7 +332,7 @@ def undo_rename(ctx: typer.Context):
 def transcode_cmd(
     ctx: typer.Context,
     ext: Annotated[Optional[list[str]], typer.Option(
-        "--ext", help="Extension to convert (repeatable). Default: mpg, mpeg, mpe, wmv, asf.")] = None,
+        "--ext", help="Extension to convert (repeatable). Default: mpg, mpeg, mpe, wmv, asf, avi.")] = None,
     folder: Annotated[Optional[Path], typer.Option(help="Only videos under this folder.")] = None,
     codec: Annotated[str, typer.Option(help="h264 (plays everywhere, incl. the web UI) or hevc (smaller files).")] = "h264",
     crf: Annotated[Optional[int], typer.Option(help="Quality; lower = better and bigger. Default 20 (h264) / 24 (hevc).")] = None,
@@ -345,7 +345,7 @@ def transcode_cmd(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be converted; change nothing.")] = False,
     limit: Annotated[Optional[int], typer.Option(help="Convert at most this many files.")] = None,
 ):
-    """Convert old .mpg/.wmv files to MP4 (H.264 + AAC) next to the originals.
+    """Convert old .mpg/.wmv/.avi files to MP4 (H.264 + AAC) next to the originals.
 
     Each result is verified (readable, same length, audio present) before anything else happens.
     Re-running is safe: files that already have a good .mp4 beside them aren't re-encoded, so

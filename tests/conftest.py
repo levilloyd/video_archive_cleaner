@@ -60,3 +60,17 @@ def old_clips(tmp_path_factory):
     for codecs, name in ((["-c:v", "mpeg2video", "-c:a", "mp2"], "a.mpg"), (["-c:v", "wmv2", "-c:a", "wmav2"], "b.wmv")):
         subprocess.run(["ffmpeg", "-v", "error", "-y", *src, *codecs, str(d / name)], check=True)
     return d
+
+
+@pytest.fixture(scope="session")
+def avi_clips(tmp_path_factory):
+    """Two kinds of AVI found in home-video archives: widescreen interlaced DV from a tape camcorder, and
+    MPEG-4 (Xvid-style) with MP3 audio."""
+    d = tmp_path_factory.mktemp("avi")
+    audio = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"]
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=720x480:rate=30000/1001:duration=1",
+                    *audio, "-vf", "tinterlace=mode=interleave_top,setsar=32/27", "-aspect", "16:9",
+                    "-target", "ntsc-dv", "-flags", "+ilme+ildct", str(d / "dv.avi")], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x480:rate=25:duration=1",
+                    *audio, "-c:v", "mpeg4", "-vtag", "XVID", "-c:a", "libmp3lame", str(d / "xvid.avi")], check=True)
+    return d

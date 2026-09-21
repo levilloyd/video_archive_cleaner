@@ -241,3 +241,53 @@ def test_cataloging_the_same_path_twice_is_harmless(conn, tmp_path, clip_dir, th
     shutil.copy(clip_dir / "a.mp4", f)
     stats = scanner.scan_files(conn, [f, f, tmp_path / "." / "x.mp4"], thumbs)   # three spellings of one file
     assert stats.added == 1 and conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 1
+
+
+# --------------------------------------------------------------------------- AVI (DV and MPEG-4)
+
+def test_avi_is_converted_by_default():
+    assert "avi" in transcode.DEFAULT_EXTS
+
+
+def test_dv_avi_keeps_its_widescreen_shape_and_is_deinterlaced(tmp_path, avi_clips, monkeypatch):
+    src = tmp_path / "tape.avi"
+    shutil.copy(avi_clips / "dv.avi", src)
+    assert transcode.detect_interlaced(src) is True            # tape footage: fields are detected
+
+    commands = []
+    real_build = transcode.build_command
+    monkeypatch.setattr(transcode, "build_command", lambda *a, **k: commands.append(real_build(*a, **k)) or commands[-1])
+    dst, encoded = transcode.convert(src, FAST)
+    assert encoded and "yadif" in " ".join(commands[0])        # deinterlacing was applied
+
+    s, duration, _ = streams(dst)
+    assert s["video"]["codec_name"] == "h264" and s["audio"]["codec_name"] == "aac"
+    assert (s["video"]["width"], s["video"]["height"]) == (720, 480)
+    assert s["video"]["display_aspect_ratio"] == "16:9"        # not squashed to 4:3
+    assert abs(duration - 1.0) < 0.3
+    assert dst.stat().st_size < src.stat().st_size / 5         # DV is ~3.5 MB per second
+
+
+def test_xvid_avi_is_left_progressive(tmp_path, avi_clips):
+    src = tmp_path / "old.avi"
+    shutil.copy(avi_clips / "xvid.avi", src)
+    assert transcode.detect_interlaced(src) is False
+    dst, _ = transcode.convert(src, FAST)
+    s, _, _ = streams(dst)
+    assert s["video"]["codec_name"] == "h264" and s["audio"]["codec_name"] == "aac"
+    assert s["video"]["display_aspect_ratio"] == "4:3"
+
+
+def test_cli_picks_up_avi_files_without_asking(tmp_path, avi_clips):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    shutil.copy(avi_clips / "dv.avi", lib / "tape one.avi")
+    shutil.copy(avi_clips / "xvid.avi", lib / "clip.AVI")
+    db_path = tmp_path / "c.db"
+    assert run(db_path, "scan", str(lib)).exit_code == 0
+    r = run(db_path, "transcode", "--dry-run")
+    assert "2 video(s) to convert" in r.output and "tape one.mp4" in r.output and "clip.mp4" in r.output
+
+    r = run(db_path, "transcode", "--preset", "ultrafast", "--originals", "keep")
+    assert r.exit_code == 0 and "Converted 2 file(s)" in r.output
+    assert sorted(p.name for p in lib.iterdir()) == ["clip.AVI", "clip.mp4", "tape one.avi", "tape one.mp4"]

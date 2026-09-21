@@ -24,7 +24,7 @@ vidcat scan ~/Movies /Volumes/Archive/Videos   # add new/changed files; re-runs 
 vidcat dupes [--dry-run]                       # interactively pick the one copy to keep; the rest are removed (Trash, or see below)
 vidcat names [--ai]                            # find poorly named videos and rename them with suggestions
 vidcat undo-rename                             # revert the most recent rename
-vidcat transcode [--dry-run]                   # convert old .mpg/.wmv files to MP4 (H.264 + AAC)
+vidcat transcode [--dry-run]                   # convert old .mpg/.wmv/.avi files to MP4 (H.264 + AAC)
 vidcat tag add 12 family "2019 trip"           # tag by id (see `vidcat ls`), path, or file name
 vidcat tag remove 12 family
 vidcat tag list                                # all tags with counts
@@ -48,15 +48,15 @@ At each prompt you can accept, edit, type your own, skip, open the video, or "ke
 Existing files are never overwritten (a ` (2)` suffix is added instead).
 
 ### Transcoding
-`vidcat transcode` converts cataloged `.mpg`, `.mpeg`, `.mpe`, `.wmv` and `.asf` files (change with `--ext`) to
+`vidcat transcode` converts cataloged `.mpg`, `.mpeg`, `.mpe`, `.wmv`, `.asf` and `.avi` files (change with `--ext`) to
 `.mp4` next to the original: H.264 video + AAC audio, which plays everywhere, including the web UI. Use
 `--codec hevc` for smaller files (less browser support), `--crf` to trade quality for size (default 20 for
 H.264; lower is better), and `--preset slow` for smaller output at the cost of time.
 - **Safe by design.** Output is written to a hidden temp file and checked (readable, same length, audio
   present) before it's moved into place. An existing `.mp4` is never overwritten, and originals are never
   touched unless you say so.
-- **Looks right.** Interlaced footage (common from camcorders) is detected and deinterlaced
-  (`--deinterlace auto|always|never`). The capture date is written into the new file when it's trustworthy, and
+- **Looks right.** Interlaced footage (common from camcorders, and the norm for DV tape captures in `.avi`) is
+  detected and deinterlaced (`--deinterlace auto|always|never`), and widescreen (16:9) video keeps its shape. The capture date is written into the new file when it's trustworthy, and
   the file's modified time is preserved.
 - **Catalog carries over.** New files are cataloged automatically and inherit the original's tags and
   description.
