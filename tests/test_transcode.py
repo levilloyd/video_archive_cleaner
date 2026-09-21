@@ -442,3 +442,64 @@ def test_forcing_a_playable_mov_is_a_lossless_rewrap(tmp_path, mov_clips, monkey
     assert cmd[cmd.index("-c:v") + 1] == "copy" and cmd[cmd.index("-c:a") + 1] == "copy"
     assert frame_hashes(dst) == frame_hashes(src)
     assert streams(dst)[0]["audio"]["codec_name"] == "aac"
+
+
+# --------------------------------------------------------------------------- M4V and 3GP
+
+def test_m4v_and_3gp_are_converted_by_default():
+    assert "m4v" in transcode.DEFAULT_EXTS and "3gp" in transcode.DEFAULT_EXTS
+
+
+@pytest.mark.parametrize("name", ["h263.3gp", "mpeg4.3gp", "h264.3gp"])
+def test_3gp_is_always_converted_even_when_the_codecs_are_fine(tmp_path, phone_clips, name):
+    src = tmp_path / name
+    shutil.copy(phone_clips / name, src)
+    dst, encoded = transcode.convert(src, FAST)          # never AlreadyPlayable: browsers can't open .3gp
+    s, duration, fmt = streams(dst)
+    assert encoded and dst.suffix == ".mp4"
+    assert s["video"]["codec_name"] == "h264" and s["video"]["pix_fmt"] == "yuv420p" and s["audio"]["codec_name"] == "aac"
+    assert abs(duration - 2.0) < 0.4 and transcode.browser_compatible(media.probe(dst))
+
+
+def test_m4v_that_already_plays_is_left_alone(tmp_path, phone_clips):
+    src = tmp_path / "playable.m4v"
+    shutil.copy(phone_clips / "playable.m4v", src)
+    with pytest.raises(transcode.AlreadyPlayable):
+        transcode.convert(src, FAST)
+    assert [p.name for p in tmp_path.iterdir()] == ["playable.m4v"]
+
+
+def test_m4v_with_ac3_audio_keeps_its_picture_and_fixes_the_audio(tmp_path, phone_clips, monkeypatch):
+    src = tmp_path / "ac3.m4v"
+    shutil.copy(phone_clips / "ac3.m4v", src)
+    commands = spy_commands(monkeypatch)
+    dst, encoded = transcode.convert(src, FAST)
+    assert encoded and "libx264" not in commands[0]
+    assert frame_hashes(dst) == frame_hashes(src)                       # picture untouched
+    assert streams(dst)[0]["audio"]["codec_name"] == "aac"              # AC-3 isn't playable everywhere
+
+
+def test_a_truncated_m4v_is_reported_not_crashed_on(tmp_path, phone_clips):
+    src = tmp_path / "truncated.m4v"
+    shutil.copy(phone_clips / "truncated.m4v", src)
+    with pytest.raises(TranscodeError, match="can't read"):
+        transcode.convert(src, FAST)
+    assert [p.name for p in tmp_path.iterdir()] == ["truncated.m4v"]    # nothing written, nothing left behind
+
+
+def test_cli_handles_a_mixed_folder_of_phone_and_m4v_files(tmp_path, phone_clips):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    for name in ("mpeg4.3gp", "h264.3gp", "playable.m4v", "ac3.m4v", "truncated.m4v"):
+        shutil.copy(phone_clips / name, lib / name)
+    db_path = tmp_path / "c.db"
+    assert run(db_path, "scan", str(lib)).exit_code == 0
+
+    r = run(db_path, "transcode", "--dry-run")
+    assert "5 video(s) to convert" in r.output and r.output.count("would be skipped") == 1
+
+    r = run(db_path, "transcode", "--preset", "ultrafast", "--originals", "keep")
+    assert r.exit_code == 0, r.output
+    assert "Converted 3 file(s)" in r.output and "1 skipped" in r.output and "1 already play in browsers" in r.output
+    assert sorted(p.name for p in lib.glob("*.mp4")) == ["ac3.mp4", "h264.mp4", "mpeg4.mp4"]
+    assert sorted(p.name for p in lib.glob("*.m4v")) == ["ac3.m4v", "playable.m4v", "truncated.m4v"]   # originals kept

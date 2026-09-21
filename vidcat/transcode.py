@@ -1,4 +1,4 @@
-"""Convert old camcorder-era formats (MPEG-1/2, WMV, ASF, AVI incl. DV, QuickTime) to modern MP4."""
+"""Convert old camcorder-era formats (MPEG-1/2, WMV, ASF, AVI incl. DV, QuickTime, M4V, 3GP) to modern MP4."""
 import os
 import re
 import subprocess
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import config, media
 
-DEFAULT_EXTS = ("mpg", "mpeg", "mpe", "wmv", "asf", "avi", "mov")
+DEFAULT_EXTS = ("mpg", "mpeg", "mpe", "wmv", "asf", "avi", "mov", "m4v", "3gp")
 PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
 CODECS = {
     # name: (ffmpeg encoder, default CRF, extra args)

@@ -106,3 +106,24 @@ def interlaced_mov(tmp_path_factory):
                     "-pix_fmt", "yuv420p", "-flags", "+ilme+ildct", "-c:a", "pcm_s16le", str(d / "interlaced.mov")],
                    check=True)
     return d
+
+
+@pytest.fixture(scope="session")
+def phone_clips(tmp_path_factory):
+    """Phone-era and iTunes-style files: 3GP in three codec mixes, M4V that plays, M4V with AC-3 audio, and an
+    M4V cut off before its index was written (a recording interrupted by, say, a dead battery)."""
+    d = tmp_path_factory.mktemp("phone")
+    ff = lambda *a: subprocess.run(["ffmpeg", "-v", "error", "-y", *a], check=True)
+    def video(size): return ["-f", "lavfi", "-i", f"testsrc=size={size}:rate=25:duration=2"]
+    audio = ["-f", "lavfi", "-i", "sine=frequency=440:duration=2"]
+    ff(*video("176x144"), *audio, "-c:v", "h263", "-c:a", "aac", "-f", "3gp", str(d / "h263.3gp"))
+    ff(*video("320x240"), *audio, "-c:v", "mpeg4", "-c:a", "aac", "-f", "3gp", str(d / "mpeg4.3gp"))
+    ff(*video("320x240"), *audio, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac",
+       "-f", "3gp", str(d / "h264.3gp"))   # browser-friendly codecs, but a container browsers can't open
+    ff(*video("320x240"), *audio, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac",
+       "-f", "mp4", str(d / "playable.m4v"))
+    ff(*video("320x240"), *audio, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "ac3",
+       "-f", "mp4", str(d / "ac3.m4v"))
+    data = (d / "playable.m4v").read_bytes()
+    (d / "truncated.m4v").write_bytes(data[: len(data) // 2])   # moov atom (at the end) is gone
+    return d

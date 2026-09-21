@@ -24,7 +24,7 @@ vidcat scan ~/Movies /Volumes/Archive/Videos   # add new/changed files; re-runs 
 vidcat dupes [--dry-run]                       # interactively pick the one copy to keep; the rest are removed (Trash, or see below)
 vidcat names [--ai]                            # find poorly named videos and rename them with suggestions
 vidcat undo-rename                             # revert the most recent rename
-vidcat transcode [--dry-run]                   # convert old .mpg/.wmv/.avi/.mov files to MP4 (H.264 + AAC)
+vidcat transcode [--dry-run]                   # convert old .mpg/.wmv/.avi/.mov/.m4v/.3gp files to MP4 (H.264 + AAC)
 vidcat tag add 12 family "2019 trip"           # tag by id (see `vidcat ls`), path, or file name
 vidcat tag remove 12 family
 vidcat tag list                                # all tags with counts
@@ -49,17 +49,18 @@ At each prompt you can accept, edit, type your own, skip, open the video, or "ke
 Existing files are never overwritten (a ` (2)` suffix is added instead).
 
 ### Transcoding
-`vidcat transcode` converts cataloged `.mpg`, `.mpeg`, `.mpe`, `.wmv`, `.asf`, `.avi` and `.mov` files (change with `--ext`) to
+`vidcat transcode` converts cataloged `.mpg`, `.mpeg`, `.mpe`, `.wmv`, `.asf`, `.avi`, `.mov`, `.m4v` and `.3gp` files (change with `--ext`) to
 `.mp4` next to the original: H.264 video + AAC audio, which plays everywhere, including the web UI. Use
 `--codec hevc` for smaller files (less browser support), `--crf` to trade quality for size (default 20 for
 H.264; lower is better), and `--preset slow` for smaller output at the cost of time.
-- **Only when needed (QuickTime).** A `.mov` is just a container, and many already play in browsers. Those
+- **Only when needed (QuickTime, M4V).** A `.mov` or `.m4v` is just a container, and many already play in browsers. Those
   (H.264 in 8-bit 4:2:0 with AAC or MP3 audio, or no audio) are skipped, since re-encoding them would only lose
   quality. Anything else (MJPEG from old digital cameras, ProRes, HEVC, PCM audio, 4:2:2 or 10-bit video) is
   converted. `--include-playable` converts them anyway; `--dry-run` shows which would be skipped. When the picture
   is already fine and only the audio isn't (PCM audio is common), the picture is copied bit-for-bit and only the
   audio is converted: lossless and fast. Interlaced footage is always deinterlaced instead, even if the file
   claims to be progressive (some editing apps mislabel it), because copying it would keep the combing.
+  `.3gp` (old phone video, usually MPEG-4 with AMR audio) is always converted, since browsers can't play it.
 - **Safe by design.** Output is written to a hidden temp file and checked (readable, same length, audio
   present) before it's moved into place. An existing `.mp4` is never overwritten, and originals are never
   touched unless you say so.
