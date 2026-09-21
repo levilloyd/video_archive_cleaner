@@ -28,6 +28,12 @@ GENERIC_FOLDERS = {
     "private", "avchd", "stream", "bdmv", "mp_root", "prgxx", "misc", "originals", "masters",
 }
 
+# A folder made up only of these words tells you nothing about the videos in it ("Home Videos", "My Family Movies").
+GENERIC_FOLDER_WORDS = (
+    {w for f in GENERIC_FOLDERS for w in re.findall(r"[^\W\d_]+", f)} | GENERIC_TOKENS
+    | {"home", "family", "my", "our", "all", "old", "archive", "archives", "movies", "films", "tape", "tapes", "digital"}
+)
+
 _HEX_ID = re.compile(r"^[0-9a-f]{8}(?:[-_]?[0-9a-f]{4}){3}[-_]?[0-9a-f]{12}$")
 _LONG_HEX = re.compile(r"^(?=.*\d)[0-9a-f]{12,}$")
 _CAMERA_DIR = re.compile(r"^\d{3}[a-z_]{3,}$|^\d{6,8}_?\d{0,4}$|^mp_root$|^\d{4}$")
@@ -64,14 +70,26 @@ def sanitize_stem(text: str, max_len: int = 150) -> str:
     return text[:max_len].rstrip(" .")
 
 
+def is_generic_folder(name: str) -> bool:
+    """True for folder names that say nothing about their contents: hidden, camera-card or year folders, and
+    names made only of filler words such as "Home Videos"."""
+    lower = name.lower()
+    if name.startswith(".") or lower in GENERIC_FOLDERS or _CAMERA_DIR.match(lower):
+        return True
+    words = re.findall(r"[^\W\d_]+", lower)
+    return all(w in GENERIC_FOLDER_WORDS for w in words)  # also true when there are no letters at all
+
+
 def _folder_label(path: Path, home: Path | None = None) -> str | None:
     home = home or Path.home()
     for parent in list(path.parents)[:3]:
         name = parent.name
-        if not name or parent == home:
+        # Stop at the top: the home folder, the filesystem root, or a volume root such as /Volumes/Memories,
+        # whose name (a drive or share label) says nothing about the video.
+        if not name or parent == home or parent.parent == Path("/Volumes"):
             break
-        if name.startswith(".") or name.lower() in GENERIC_FOLDERS or _CAMERA_DIR.match(name.lower()):
-            continue
+        if is_generic_folder(name):
+            continue  # keep looking further up for something meaningful
         if name_quality(name) >= config.BAD_NAME_THRESHOLD:
             return name
     return None

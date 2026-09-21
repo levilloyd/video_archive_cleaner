@@ -43,7 +43,8 @@ See "Volumes without a Trash" below for network shares.
 A name is flagged as not useful when it's a camera default (`IMG_1234`, `MVI_0042`, `PXL_2023…`), a bare date
 or number, a UUID/hash, or generic words like "Video" or "Untitled". Suggestions look like
 `2019-07-04 Lake Trip - Kids Building Sandcastles`, built from the capture date, a meaningful parent folder,
-and (with `--ai`) a short description from sampled video frames. Frames are sent only to your local Ollama.
+and (with `--ai`) a short description from sampled video frames. Folders that say nothing ("Home Videos",
+"Movies", year and camera-card folders, drive or share names) are skipped in favor of a meaningful one further up, if any. Frames are sent only to your local Ollama.
 At each prompt you can accept, edit, type your own, skip, open the video, or "keep name forever".
 Existing files are never overwritten (a ` (2)` suffix is added instead).
 

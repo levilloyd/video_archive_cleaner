@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from vidcat import names
@@ -39,3 +41,43 @@ def test_suggest_without_folder_adds_time(tmp_path):
     video = {"path": str(tmp_path / "DCIM" / "100APPLE" / "IMG_1.mov"), "created_at": 1562275930}
     s = names.suggest_name(video)
     assert "Beach" not in s and len(s.split()) == 2  # "YYYY-MM-DD HH-MM-SS"
+
+
+@pytest.mark.parametrize("folder", [
+    "Home Videos", "home videos", "HOME VIDEOS", "My Family Movies", "Family", "Old Videos", "Videos 2004",
+    "Movies", "DCIM", "100APPLE", "Camera Uploads", "2007", "New Folder", "Family Video Archive", ".hidden",
+])
+def test_generic_folders_are_not_used_as_labels(folder):
+    assert names.is_generic_folder(folder), folder
+
+
+@pytest.mark.parametrize("folder", [
+    "Isaac", "Otterstroms", "Levi and Rebecca", "Camp Zarahemla", "Home Videos - Christmas", "Priest Lake",
+    "Grandma's House", "Eliza",
+])
+def test_meaningful_folders_are_kept(folder):
+    assert not names.is_generic_folder(folder), folder
+
+
+def test_suggestion_skips_home_videos_but_keeps_looking_upward(tmp_path):
+    ts = 1562275930
+    # The case from a real archive: files in year folders under "Home Videos"
+    video = {"path": "/Volumes/Memories/Home Videos/2007/Elizas_first_steps.mov", "created_at": ts, "date_source": "mtime"}
+    assert names.suggest_name(video, "Baby Takes First Steps") == "Baby Takes First Steps"
+    assert "Home Videos" not in names.suggest_name(video)
+    assert names.suggest_name({**video, "date_source": "metadata"}, "Baby Takes First Steps") == \
+        "2019-07-04 - Baby Takes First Steps"
+
+    # A generic folder is skipped, but a meaningful one further up is still found.
+    deep = {"path": "/x/Isaac/Home Videos/Movies/clip.mov", "created_at": ts, "date_source": "metadata"}
+    assert names.suggest_name(deep, "Painting In A High Chair") == "2019-07-04 Isaac - Painting In A High Chair"
+
+
+@pytest.mark.parametrize("path", [
+    "/Volumes/Memories/clip.mov",                       # straight on a share: its name isn't a label
+    "/Volumes/Memories/Home Videos/clip.mov",
+    "/Volumes/Big Backup Drive/2007/clip.mov",
+])
+def test_volume_names_are_never_used_as_labels(path):
+    assert names._folder_label(Path(path)) is None
+    assert "Memories" not in names.suggest_name({"path": path, "created_at": 1562275930, "date_source": "metadata"}, "X Y")
