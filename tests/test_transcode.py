@@ -194,3 +194,50 @@ def test_cli_never_trashes_original_when_conversion_fails(tmp_path, old_lib, mon
     r = run(db_path, "transcode", "--originals", "trash")
     assert "Skipped" in r.output and "boom" in r.output
     assert sorted(p.name for p in old_lib.iterdir()) == ["03_20_04 020.mpg", "kids.wmv"]
+
+
+# --------------------------------------------------------------------------- same name, different format
+
+def test_output_names_avoid_collisions_between_formats(tmp_path, old_clips):
+    d = tmp_path / "d"
+    d.mkdir()
+    for name, src in (("clip.mpg", "a.mpg"), ("clip.wmv", "b.wmv"), ("Mix.MPG", "a.mpg"), ("mix.wmv", "b.wmv"),
+                      ("solo.mpg", "a.mpg"), ("other.mpg", "a.mpg"), ("other.mp4", "a.mpg")):
+        shutil.copy(old_clips / src, d / name)
+
+    assert transcode.output_path(d / "clip.mpg").name == "clip (mpg).mp4"
+    assert transcode.output_path(d / "clip.wmv").name == "clip (wmv).mp4"
+    assert transcode.output_path(d / "Mix.MPG").name == "Mix (mpg).mp4"      # names compare ignoring case
+    assert transcode.output_path(d / "mix.wmv").name == "mix (wmv).mp4"
+    assert transcode.output_path(d / "solo.mpg").name == "solo.mp4"          # nothing to clash with: plain name
+    assert transcode.output_path(d / "other.mpg").name == "other.mp4"        # an .mp4 sibling isn't a source
+
+
+def test_cli_converts_same_name_different_format_files_separately(tmp_path, old_clips):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    shutil.copy(old_clips / "a.mpg", lib / "tummy.mpg")
+    shutil.copy(old_clips / "b.wmv", lib / "tummy.wmv")   # same clip, other encoding: near-identical length
+    db_path = tmp_path / "c.db"
+    assert run(db_path, "scan", str(lib)).exit_code == 0
+
+    r = run(db_path, "transcode", "--preset", "ultrafast", "--originals", "keep")
+    assert r.exit_code == 0, r.output
+    assert "Converted 2 file(s)" in r.output
+    assert sorted(p.name for p in lib.iterdir()) == ["tummy (mpg).mp4", "tummy (wmv).mp4", "tummy.mpg", "tummy.wmv"]
+    conn = db.connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM videos WHERE ext = 'mp4'").fetchone()[0] == 2
+
+    # Each original now has its own output, so removing both originals loses nothing.
+    r = run(db_path, "transcode", "--originals", "archive")
+    assert r.exit_code == 0, r.output
+    assert sorted(p.name for p in lib.iterdir() if p.is_file()) == ["tummy (mpg).mp4", "tummy (wmv).mp4"]
+    assert conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 2
+
+
+def test_cataloging_the_same_path_twice_is_harmless(conn, tmp_path, clip_dir, thumbs):
+    from vidcat import scanner
+    f = tmp_path / "x.mp4"
+    shutil.copy(clip_dir / "a.mp4", f)
+    stats = scanner.scan_files(conn, [f, f, tmp_path / "." / "x.mp4"], thumbs)   # three spellings of one file
+    assert stats.added == 1 and conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 1

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import media
+from . import config, media
 
 DEFAULT_EXTS = ("mpg", "mpeg", "mpe", "wmv", "asf")
 PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
@@ -117,6 +117,20 @@ def verify_output(path: Path, src_duration: float | None, need_audio: bool) -> s
 
 
 def output_path(src: Path) -> Path:
+    """Where `src` is converted to: `name.mp4`, or `name (ext).mp4` when another video in the same folder has
+    the same name in a different format (say clip.mpg and clip.wmv). Otherwise the two would fight over one
+    output, and the second would be mistaken for an "already converted" copy of the first."""
+    stem = src.stem.lower()
+    try:
+        clash = any(
+            p.name != src.name and p.stem.lower() == stem
+            and p.suffix.lower() in config.VIDEO_EXTS and p.suffix.lower() != ".mp4"
+            for p in src.parent.iterdir()
+        )
+    except OSError:
+        clash = False
+    if clash:
+        return src.with_name(f"{src.stem} ({src.suffix.lstrip('.').lower()}).mp4")
     return src.with_suffix(".mp4")
 
 

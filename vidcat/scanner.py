@@ -81,9 +81,12 @@ def scan_files(
 ) -> ScanStats:
     """Add or refresh just these files; the rest of the catalog is left untouched."""
     media.require_tools()
-    found = []
+    found, seen = [], set()
     for f in files:
         p = f.resolve()
+        if str(p) in seen:
+            continue
+        seen.add(str(p))
         st = p.stat()
         found.append((str(p), st.st_size, st.st_mtime))
     return _sync(conn, found, thumbs, workers, make_thumbs, on_progress, full=False)

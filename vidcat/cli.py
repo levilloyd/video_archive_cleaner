@@ -415,6 +415,10 @@ def transcode_cmd(
                     console.print(f"  [red]Skipped:[/red] {e}")
                     failed += 1
                     continue
+            if any(d == dst for _, d in done):  # defensive: two originals must never share one output
+                console.print(f"  [red]Skipped:[/red] {dst.name} already belongs to another file in this run")
+                failed += 1
+                continue
             note = f"{human_size(r['size'])} → {human_size(dst.stat().st_size)}" if encoded else "already converted"
             console.print(f"  [green]✓[/green] {dst.name} ({note})")
             done.append((r, dst))
