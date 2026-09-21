@@ -332,7 +332,7 @@ def undo_rename(ctx: typer.Context):
 def transcode_cmd(
     ctx: typer.Context,
     ext: Annotated[Optional[list[str]], typer.Option(
-        "--ext", help="Extension to convert (repeatable). Default: mpg, mpeg, mpe, wmv, asf, avi.")] = None,
+        "--ext", help="Extension to convert (repeatable). Default: mpg, mpeg, mpe, wmv, asf, avi, mov.")] = None,
     folder: Annotated[Optional[Path], typer.Option(help="Only videos under this folder.")] = None,
     codec: Annotated[str, typer.Option(help="h264 (plays everywhere, incl. the web UI) or hevc (smaller files).")] = "h264",
     crf: Annotated[Optional[int], typer.Option(help="Quality; lower = better and bigger. Default 20 (h264) / 24 (hevc).")] = None,
@@ -342,10 +342,13 @@ def transcode_cmd(
         help="After a verified conversion: ask (default), keep, trash, archive (move into an 'Originals (vidcat)' "
              "folder beside each file), or delete (permanent; needs interactive confirmation). Volumes with no "
              "Trash, such as network shares, use the archive folder instead of the Trash.")] = "ask",
+    include_playable: Annotated[bool, typer.Option(
+        "--include-playable",
+        help=".mov/.m4v files that browsers can already play (H.264 + AAC) are skipped; convert them anyway.")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be converted; change nothing.")] = False,
     limit: Annotated[Optional[int], typer.Option(help="Convert at most this many files.")] = None,
 ):
-    """Convert old .mpg/.wmv/.avi files to MP4 (H.264 + AAC) next to the originals.
+    """Convert old .mpg/.wmv/.avi/.mov files to MP4 (H.264 + AAC) next to the originals.
 
     Each result is verified (readable, same length, audio present) before anything else happens.
     Re-running is safe: files that already have a good .mp4 beside them aren't re-encoded, so
@@ -383,6 +386,10 @@ def transcode_cmd(
                 note = " [red](file not found; run `vidcat scan` to refresh the catalog)[/red]"
             else:
                 note = " [yellow](already exists)[/yellow]" if target.exists() else ""
+                if not note and not include_playable and Path(r["path"]).suffix.lower() in transcode_mod.BROWSER_CONTAINERS:
+                    probed = media.probe(r["path"])
+                    if probed and transcode_mod.browser_compatible(probed):
+                        note = " [dim](already plays in browsers; would be skipped)[/dim]"
             console.print(f"  {r['name']} → {target.name}{note}")
         console.print("[yellow]Dry run: nothing was converted.[/yellow]")
         return
@@ -394,7 +401,7 @@ def transcode_cmd(
         raise typer.Exit(1)
 
     settings = transcode_mod.Settings(codec=codec, crf=crf, preset=preset, deinterlace=deinterlace)
-    done, failed = [], 0
+    done, failed, playable = [], 0, 0
     try:
         for n, r in enumerate(rows, 1):
             src = Path(r["path"])
@@ -410,7 +417,12 @@ def transcode_cmd(
                     dst, encoded = transcode_mod.convert(
                         src, settings, creation_time=r["created_at"] if trusted else None,
                         on_progress=lambda f: progress.update(task, completed=f),
+                        include_playable=include_playable,
                     )
+                except transcode_mod.AlreadyPlayable:
+                    console.print("  [dim]Already plays in browsers; left as is (use --include-playable to convert).[/dim]")
+                    playable += 1
+                    continue
                 except transcode_mod.TranscodeError as e:
                     console.print(f"  [red]Skipped:[/red] {e}")
                     failed += 1
@@ -425,8 +437,9 @@ def transcode_cmd(
     except KeyboardInterrupt:
         console.print("[yellow]Interrupted. Finished conversions are kept; the unfinished one was discarded.[/yellow]")
 
+    already = f", {playable} already play in browsers" if playable else ""
     if not done:
-        console.print(f"Nothing converted{f', {failed} skipped' if failed else ''}.")
+        console.print(f"Nothing converted{f', {failed} skipped' if failed else ''}{already}.")
         return
 
     # Catalog the new files; they inherit tags and descriptions from the originals.
@@ -452,7 +465,7 @@ def transcode_cmd(
     before = sum(r["size"] for r, _ in converted)
     after = sum(new["size"] for _, new in converted)
     console.print(f"[green]Converted {len(converted)} file(s)[/green]"
-                  f"{f', {failed} skipped' if failed else ''}. Originals {human_size(before)}, MP4s {human_size(after)}.")
+                  f"{f', {failed} skipped' if failed else ''}{already}. Originals {human_size(before)}, MP4s {human_size(after)}.")
 
     mode = None  # what to do with the originals: "trash" | "archive" | "delete" | None (keep)
     if originals == "ask":

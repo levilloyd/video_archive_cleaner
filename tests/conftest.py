@@ -74,3 +74,35 @@ def avi_clips(tmp_path_factory):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x480:rate=25:duration=1",
                     *audio, "-c:v", "mpeg4", "-vtag", "XVID", "-c:a", "libmp3lame", str(d / "xvid.avi")], check=True)
     return d
+
+
+@pytest.fixture(scope="session")
+def mov_clips(tmp_path_factory):
+    """QuickTime files: one that browsers can already play, and several that they can't, each for a
+    different reason (this is what decides whether `transcode` converts a .mov)."""
+    d = tmp_path_factory.mktemp("mov")
+    video = ["-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=1"]
+    audio = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"]
+    h264 = ["-c:v", "libx264", "-preset", "ultrafast"]
+    cases = {
+        "playable.mov": [*video, *audio, *h264, "-pix_fmt", "yuv420p", "-c:a", "aac"],
+        "silent.mov": [*video, *h264, "-pix_fmt", "yuv420p", "-an"],                       # no audio is fine
+        "mjpeg.mov": [*video, *audio, "-c:v", "mjpeg", "-c:a", "pcm_s16le"],               # old digital cameras
+        "pcm_audio.mov": [*video, *audio, *h264, "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le"],
+        "yuv422.mov": [*video, *audio, *h264, "-pix_fmt", "yuv422p", "-c:a", "aac"],       # 4:2:2 H.264
+    }
+    for name, args in cases.items():
+        subprocess.run(["ffmpeg", "-v", "error", "-y", *args, str(d / name)], check=True)
+    return d
+
+
+@pytest.fixture(scope="session")
+def interlaced_mov(tmp_path_factory):
+    """H.264 picture that browsers could play, but interlaced and with PCM audio, so it needs work."""
+    d = tmp_path_factory.mktemp("imov")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=50:duration=3",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                    "-vf", "tinterlace=mode=interleave_top", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-flags", "+ilme+ildct", "-c:a", "pcm_s16le", str(d / "interlaced.mov")],
+                   check=True)
+    return d

@@ -291,3 +291,154 @@ def test_cli_picks_up_avi_files_without_asking(tmp_path, avi_clips):
     r = run(db_path, "transcode", "--preset", "ultrafast", "--originals", "keep")
     assert r.exit_code == 0 and "Converted 2 file(s)" in r.output
     assert sorted(p.name for p in lib.iterdir()) == ["clip.AVI", "clip.mp4", "tape one.avi", "tape one.mp4"]
+
+
+# --------------------------------------------------------------------------- QuickTime (.mov)
+
+PLAYABLE_MOVS = ["playable.mov", "silent.mov"]
+UNPLAYABLE_MOVS = ["mjpeg.mov", "pcm_audio.mov", "yuv422.mov"]
+
+
+def test_mov_is_converted_by_default_when_needed():
+    assert "mov" in transcode.DEFAULT_EXTS
+
+
+@pytest.mark.parametrize("name, expected", [(n, True) for n in PLAYABLE_MOVS] + [(n, False) for n in UNPLAYABLE_MOVS])
+def test_browser_compatibility_check(mov_clips, name, expected):
+    assert transcode.browser_compatible(media.probe(mov_clips / name)) is expected
+
+
+@pytest.mark.parametrize("name", UNPLAYABLE_MOVS)
+def test_unplayable_mov_is_converted_to_something_browsers_play(tmp_path, mov_clips, name):
+    src = tmp_path / name
+    shutil.copy(mov_clips / name, src)
+    dst, encoded = transcode.convert(src, FAST)
+    assert encoded and dst.suffix == ".mp4"
+    assert transcode.browser_compatible(media.probe(dst))          # the result is what browsers play
+    s, duration, _ = streams(dst)
+    assert s["video"]["codec_name"] == "h264" and s["video"]["pix_fmt"] == "yuv420p"
+    assert s["audio"]["codec_name"] == "aac" and abs(duration - 1.0) < 0.3
+
+
+@pytest.mark.parametrize("name", PLAYABLE_MOVS)
+def test_playable_mov_is_left_alone_unless_forced(tmp_path, mov_clips, name):
+    src = tmp_path / name
+    shutil.copy(mov_clips / name, src)
+    with pytest.raises(transcode.AlreadyPlayable):
+        transcode.convert(src, FAST)
+    assert not src.with_suffix(".mp4").exists()                    # nothing was written
+
+    dst, encoded = transcode.convert(src, FAST, include_playable=True)
+    assert encoded and dst.exists()
+
+
+def test_the_playability_skip_only_applies_to_browser_containers(tmp_path, avi_clips, old_clips):
+    """An H.264 .avi or a .wmv can't be played by a browser regardless of what's inside, so they always convert."""
+    src = tmp_path / "x.avi"
+    shutil.copy(avi_clips / "xvid.avi", src)
+    assert transcode.convert(src, FAST)[1] is True
+    assert transcode.convert(old_clips / "b.wmv", FAST)[1] is True
+    (old_clips / "b.mp4").unlink(missing_ok=True)
+
+
+def test_cli_converts_only_the_movs_that_need_it(tmp_path, mov_clips):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    for name in PLAYABLE_MOVS + UNPLAYABLE_MOVS:
+        shutil.copy(mov_clips / name, lib / name)
+    db_path = tmp_path / "c.db"
+    assert run(db_path, "scan", str(lib)).exit_code == 0
+
+    r = run(db_path, "transcode", "--dry-run")
+    assert "5 video(s) to convert" in r.output
+    assert r.output.count("would be skipped") == 2                # the two that already play
+
+    r = run(db_path, "transcode", "--preset", "ultrafast", "--originals", "keep")
+    assert r.exit_code == 0, r.output
+    assert "Converted 3 file(s)" in r.output and "2 already play in browsers" in r.output
+    assert sorted(p.name for p in lib.glob("*.mp4")) == ["mjpeg.mp4", "pcm_audio.mp4", "yuv422.mp4"]
+    assert sorted(p.name for p in lib.glob("*.mov")) == sorted(PLAYABLE_MOVS + UNPLAYABLE_MOVS)  # all originals kept
+
+    r = run(db_path, "transcode", "--preset", "ultrafast", "--originals", "keep", "--include-playable")
+    assert r.exit_code == 0, r.output
+    assert sorted(p.name for p in lib.glob("*.mp4")) == [
+        "mjpeg.mp4", "pcm_audio.mp4", "playable.mp4", "silent.mp4", "yuv422.mp4"]
+
+
+def test_cli_with_only_playable_movs_says_so_and_changes_nothing(tmp_path, mov_clips):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    shutil.copy(mov_clips / "playable.mov", lib / "playable.mov")
+    db_path = tmp_path / "c.db"
+    run(db_path, "scan", str(lib))
+    r = run(db_path, "transcode", "--originals", "trash")
+    assert r.exit_code == 0 and "Nothing converted, 1 already play in browsers" in r.output
+    assert [p.name for p in lib.iterdir()] == ["playable.mov"]
+
+
+# --------------------------------------------------------------------------- lossless copy when only part needs work
+
+def frame_hashes(path):
+    """Per-frame checksums of the decoded picture: identical iff the picture is bit-for-bit the same."""
+    out = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-map", "0:v:0", "-f", "framemd5", "-"],
+                         capture_output=True, text=True, check=True).stdout
+    return [line.split(",")[-1].strip() for line in out.splitlines() if line and not line.startswith("#")]
+
+
+def spy_commands(monkeypatch):
+    commands = []
+    real = transcode.build_command
+    monkeypatch.setattr(transcode, "build_command", lambda *a, **k: commands.append(real(*a, **k)) or commands[-1])
+    return commands
+
+
+def test_mov_with_good_picture_but_pcm_audio_keeps_its_picture_untouched(tmp_path, mov_clips, monkeypatch):
+    src = tmp_path / "pcm_audio.mov"
+    shutil.copy(mov_clips / "pcm_audio.mov", src)
+    commands = spy_commands(monkeypatch)
+    dst, encoded = transcode.convert(src, FAST)
+
+    assert encoded and "copy" in commands[0] and "libx264" not in commands[0]
+    assert frame_hashes(dst) == frame_hashes(src)                   # the picture is bit-for-bit the original
+    s, duration, _ = streams(dst)
+    assert s["audio"]["codec_name"] == "aac" and abs(duration - 1.0) < 0.3   # only the audio was converted
+    assert transcode.browser_compatible(media.probe(dst))
+
+
+def test_pictures_that_need_work_are_still_reencoded(tmp_path, mov_clips, monkeypatch):
+    for name in ("mjpeg.mov", "yuv422.mov"):
+        src = tmp_path / name
+        shutil.copy(mov_clips / name, src)
+        commands = spy_commands(monkeypatch)
+        transcode.convert(src, FAST)
+        assert "libx264" in commands[-1] and "copy" not in commands[-1][commands[-1].index("-c:v") + 1]
+
+
+def test_interlaced_picture_is_never_copied(tmp_path, interlaced_mov, monkeypatch):
+    src = tmp_path / "interlaced.mov"
+    shutil.copy(interlaced_mov / "interlaced.mov", src)
+    commands = spy_commands(monkeypatch)
+    dst, _ = transcode.convert(src, FAST)
+    joined = " ".join(commands[0])
+    assert "yadif" in joined and "libx264" in joined                 # deinterlaced, so it had to be re-encoded
+    assert frame_hashes(dst) != frame_hashes(src)
+
+
+def test_hevc_request_never_copies_h264(tmp_path, mov_clips, monkeypatch):
+    src = tmp_path / "pcm_audio.mov"
+    shutil.copy(mov_clips / "pcm_audio.mov", src)
+    commands = spy_commands(monkeypatch)
+    dst, _ = transcode.convert(src, Settings(codec="hevc", preset="ultrafast"))
+    assert "libx265" in commands[0]
+    assert streams(dst)[0]["video"]["codec_name"] == "hevc"
+
+
+def test_forcing_a_playable_mov_is_a_lossless_rewrap(tmp_path, mov_clips, monkeypatch):
+    src = tmp_path / "playable.mov"
+    shutil.copy(mov_clips / "playable.mov", src)
+    commands = spy_commands(monkeypatch)
+    dst, _ = transcode.convert(src, FAST, include_playable=True)
+    cmd = commands[0]
+    assert cmd[cmd.index("-c:v") + 1] == "copy" and cmd[cmd.index("-c:a") + 1] == "copy"
+    assert frame_hashes(dst) == frame_hashes(src)
+    assert streams(dst)[0]["audio"]["codec_name"] == "aac"

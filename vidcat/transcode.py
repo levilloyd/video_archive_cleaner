@@ -1,4 +1,4 @@
-"""Convert old camcorder-era formats (MPEG-1/2, WMV, ASF, AVI incl. DV) to modern MP4."""
+"""Convert old camcorder-era formats (MPEG-1/2, WMV, ASF, AVI incl. DV, QuickTime) to modern MP4."""
 import os
 import re
 import subprocess
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import config, media
 
-DEFAULT_EXTS = ("mpg", "mpeg", "mpe", "wmv", "asf", "avi")
+DEFAULT_EXTS = ("mpg", "mpeg", "mpe", "wmv", "asf", "avi", "mov")
 PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
 CODECS = {
     # name: (ffmpeg encoder, default CRF, extra args)
@@ -19,8 +19,18 @@ CODECS = {
 }
 
 
+# Containers browsers open natively, so a file in one only needs converting if what's *inside* won't play.
+BROWSER_CONTAINERS = (".mov", ".m4v")
+BROWSER_PIX_FMTS = ("yuv420p", "yuvj420p")   # 8-bit 4:2:0; browsers can't show 10-bit or 4:2:2 H.264
+BROWSER_AUDIO = ("aac", "mp3")
+
+
 class TranscodeError(RuntimeError):
     pass
+
+
+class AlreadyPlayable(TranscodeError):
+    """The file is already in a form browsers can play; there's nothing to convert."""
 
 
 @dataclass
@@ -53,17 +63,26 @@ def detect_interlaced(src: Path | str, frames: int = 300) -> bool:
     return total > 0 and (tff + bff) / total > 0.5
 
 
-def build_command(src: Path, dst: Path, settings: Settings, deinterlace: bool, creation_time: int | None) -> list[str]:
+def build_command(
+    src: Path, dst: Path, settings: Settings, deinterlace: bool, creation_time: int | None,
+    copy_video: bool = False, copy_audio: bool = False,
+) -> list[str]:
+    """ffmpeg command line. `copy_video` / `copy_audio` copy that part untouched (lossless) instead of encoding it."""
     encoder, default_crf, extra = CODECS[settings.codec]
     filters = ["yadif=mode=0:parity=-1:deint=0"] if deinterlace else []
-    filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")  # yuv420p needs even dimensions
-    cmd = [
-        "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(src),
-        "-map", "0:v:0", "-map", "0:a?",
+    # yuv420p needs even dimensions; out_range=tv makes full-range sources (e.g. MJPEG) standard limited-range
+    # H.264 instead of the less compatible yuvj420p.
+    filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2:out_range=tv")
+    video_args = ["-c:v", "copy"] if copy_video else [
         "-vf", ",".join(filters),
         "-c:v", encoder, "-preset", settings.preset, "-crf", str(settings.crf or default_crf),
         "-pix_fmt", "yuv420p", *extra,
-        "-c:a", "aac", "-b:a", "160k",
+    ]
+    cmd = [
+        "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(src),
+        "-map", "0:v:0", "-map", "0:a?",
+        *video_args,
+        *(["-c:a", "copy"] if copy_audio else ["-c:a", "aac", "-b:a", "160k"]),
         "-map_metadata", "0", "-movflags", "+faststart",
     ]
     if creation_time:
@@ -116,6 +135,19 @@ def verify_output(path: Path, src_duration: float | None, need_audio: bool) -> s
     return None
 
 
+def browser_video(data: dict) -> bool:
+    """True if the first video stream is H.264 in 8-bit 4:2:0, the one picture format every browser plays."""
+    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    return bool(video) and video.get("codec_name") == "h264" and video.get("pix_fmt") in BROWSER_PIX_FMTS
+
+
+def browser_compatible(data: dict) -> bool:
+    """True if a file's streams are what every browser plays: browser_video plus AAC/MP3 audio (or none)."""
+    return browser_video(data) and all(
+        s.get("codec_name") in BROWSER_AUDIO for s in data.get("streams", []) if s.get("codec_type") == "audio"
+    )
+
+
 def output_path(src: Path) -> Path:
     """Where `src` is converted to: `name.mp4`, or `name (ext).mp4` when another video in the same folder has
     the same name in a different format (say clip.mpg and clip.wmv). Otherwise the two would fight over one
@@ -140,6 +172,7 @@ def convert(
     *,
     creation_time: int | None = None,
     on_progress: Callable[[float], None] | None = None,
+    include_playable: bool = False,
 ) -> tuple[Path, bool]:
     """Convert `src` to a sibling .mp4 next to it. Returns (output_path, encoded).
 
@@ -147,7 +180,8 @@ def convert(
     correct conversion; it is then reused as-is. The output is written to a hidden temp file, verified,
     and only then moved into place, so a failed or interrupted run never leaves a half-written .mp4.
     The original is never touched. `creation_time` is stored in the output's metadata, and the output's
-    modified time is set to the original's.
+    modified time is set to the original's. A .mov/.m4v that browsers can already play raises
+    `AlreadyPlayable` (re-encoding it would only lose quality) unless `include_playable` is set.
     """
     src_data = media.probe(src)
     if not src_data:
@@ -155,6 +189,8 @@ def convert(
     src_info = media.parse_probe(src_data, src.name, 0)
     if not src_info["has_video"]:
         raise TranscodeError("the original has no video stream")
+    if not include_playable and src.suffix.lower() in BROWSER_CONTAINERS and browser_compatible(src_data):
+        raise AlreadyPlayable("already plays in browsers")
     need_audio = any(s.get("codec_type") == "audio" for s in src_data.get("streams", []))
     duration = src_info["duration"]
 
@@ -174,7 +210,13 @@ def convert(
             deinterlace = False
         else:
             deinterlace = detect_interlaced(src)
-        encode(build_command(src, tmp, settings, deinterlace, creation_time), duration, on_progress)
+        # A QuickTime file whose picture is already browser-ready (only the audio, say PCM, was the problem) keeps
+        # its picture bit-for-bit: no generation loss, and far faster. Never when it needs deinterlacing.
+        copy_video = (src.suffix.lower() in BROWSER_CONTAINERS and browser_video(src_data)
+                      and not deinterlace and settings.codec == "h264")
+        copy_audio = copy_video and all(
+            s.get("codec_name") in BROWSER_AUDIO for s in src_data.get("streams", []) if s.get("codec_type") == "audio")
+        encode(build_command(src, tmp, settings, deinterlace, creation_time, copy_video, copy_audio), duration, on_progress)
         problem = verify_output(tmp, duration, need_audio)
         if problem:
             raise TranscodeError(f"verification failed: {problem}")
