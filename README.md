@@ -23,7 +23,8 @@ Your video files are never modified except by the rename and remove actions you 
 vidcat scan ~/Movies /Volumes/Archive/Videos   # add new/changed files; re-runs skip unchanged ones
 vidcat dupes [--dry-run]                       # interactively pick the one copy to keep; the rest are removed (Trash, or see below)
 vidcat names [--ai]                            # find poorly named videos and rename them with suggestions
-vidcat undo-rename                             # revert the most recent rename
+vidcat names --ai --accept-all                 # ...or accept every suggestion without asking (see below)
+vidcat undo-rename [--count N]                 # revert the most recent rename (or the last N)
 vidcat transcode [--dry-run]                   # convert old .mpg/.wmv/.avi/.mov/.m4v/.3gp files to MP4 (H.264 + AAC)
 vidcat tag add 12 family "2019 trip"           # tag by id (see `vidcat ls`), path, or file name
 vidcat tag remove 12 family
@@ -45,8 +46,16 @@ or number, a UUID/hash, or generic words like "Video" or "Untitled". Suggestions
 `2019-07-04 Lake Trip - Kids Building Sandcastles`, built from the capture date, a meaningful parent folder,
 and (with `--ai`) a short description from sampled video frames. Folders that say nothing ("Home Videos",
 "Movies", year and camera-card folders, drive or share names) are skipped in favor of a meaningful one further up, if any. Frames are sent only to your local Ollama.
-At each prompt you can accept, edit, type your own, skip, open the video, or "keep name forever".
+At each prompt you can accept, edit, type your own, skip, open the video, or "keep name forever", or press
+`a` to accept this suggestion and all the remaining ones.
 Existing files are never overwritten (a ` (2)` suffix is added instead).
+
+**Accepting everything at once.** `vidcat names --ai --accept-all` renames every poorly named video without asking
+(about 5 seconds each with a local model; Ctrl+C is safe, and files renamed so far are kept). It's deliberately
+cautious: names that are already fine are never touched (`--all` is refused), a video whose AI description fails
+is skipped instead of being renamed without one, and if Ollama isn't reachable it stops before renaming anything.
+Try `--dry-run` first to see the new names, or `--limit 10` to start small, and undo a whole batch with
+`vidcat undo-rename --count N` (the run prints the number).
 
 ### Transcoding
 `vidcat transcode` converts cataloged `.mpg`, `.mpeg`, `.mpe`, `.wmv`, `.asf`, `.avi`, `.mov`, `.m4v` and `.3gp` files (change with `--ext`) to

@@ -218,8 +218,23 @@ def names(
     all_files: Annotated[bool, typer.Option("--all", help="Review every video, not just poorly named ones.")] = False,
     limit: Annotated[Optional[int], typer.Option(help="Stop after this many files.")] = None,
     folder: Annotated[Optional[Path], typer.Option(help="Only videos under this folder.")] = None,
+    accept_all: Annotated[bool, typer.Option(
+        "--accept-all",
+        help="Rename every poorly named video to its suggestion without asking. With --ai, a video whose AI "
+             "description fails is skipped, never renamed without one. Undo with `vidcat undo-rename --count N`.")] = False,
+    dry_run: Annotated[bool, typer.Option(
+        "--dry-run", help="With --accept-all: show the new names but rename nothing.")] = False,
 ):
-    """Find videos without useful names and interactively rename them, with suggestions."""
+    """Find videos without useful names and interactively rename them, with suggestions.
+
+    While reviewing, press `a` to accept the current suggestion and all the remaining ones.
+    """
+    if accept_all and all_files:
+        raise typer.BadParameter("--accept-all only applies to poorly named videos; it can't be combined with --all, "
+                                 "which would also rename names that are already fine.")
+    if dry_run and not accept_all:
+        raise typer.BadParameter("--dry-run only applies together with --accept-all.")
+
     conn = open_db(ctx)
     sql, params = "SELECT * FROM videos WHERE missing = 0", []
     if not all_files:
@@ -235,95 +250,148 @@ def names(
     if not rows:
         console.print("[green]No poorly named videos found.[/green]")
         return
-    console.print(f"[bold]{len(rows)}[/bold] video(s) to review.")
+    console.print(f"[bold]{len(rows)}[/bold] video(s) to " + ("rename." if accept_all else "review."))
 
+    ai_requested = ai
     if ai:
         try:
             vision.check_ollama(model)
         except vision.VisionUnavailable as e:
+            if accept_all:  # never quietly fall back to plain names for a whole batch
+                console.print(f"[red]{e}[/red]\nNothing was renamed.")
+                raise typer.Exit(1)
             console.print(f"[yellow]{e}\nContinuing without AI suggestions.[/yellow]")
             ai = False
 
-    renamed = 0
-    for n, r in enumerate(rows, 1):
-        if not os.path.exists(r["path"]):
-            continue
-        caption = r["caption"]
+    accept_rest = accept_all      # once set, remaining suggestions are applied without prompting
+    renamed = skipped = 0
 
-        def get_caption(force: bool = False):
-            nonlocal caption, ai
-            if caption and not force:
-                return
-            try:
-                with console.status(f"Asking {model} to describe the video..."):
-                    caption = vision.caption_video(r["path"], r["duration"], model)
-                with conn:
-                    conn.execute("UPDATE videos SET caption = ? WHERE id = ?", (caption, r["id"]))
-            except (vision.VisionUnavailable, media.MediaToolError) as e:
-                console.print(f"[yellow]{e}[/yellow]")
-                ai = False
+    def summary() -> None:
+        verb = "Would rename" if dry_run else "Renamed"
+        console.print(f"[green]Done.[/green] {verb} {renamed} file(s)" + (f", skipped {skipped}" if skipped else "") + ".")
+        if renamed > 1 and not dry_run and (accept_all or accept_rest):
+            console.print(f"[dim]To revert this batch: vidcat undo-rename --count {renamed}[/dim]")
 
-        if ai:
-            get_caption()
-        while True:
-            suggestion = names_mod.suggest_name(r, caption)
-            info = (f"[bold]{r['name']}[/bold]\n{r['dir']}\n"
-                    f"{human_date(r['created_at'], r['date_source'])} · {human_duration(r['duration'])} · {human_size(r['size'])}")
-            if caption:
-                info += f"\nAI description: {caption}"
-            console.print(Panel(info, title=f"{n}/{len(rows)}", title_align="left"))
-            console.print(f"Suggested: [green]{suggestion}{Path(r['name']).suffix}[/green]")
-            options = ["[bold]Enter[/bold] accept", "[bold]e[/bold]dit", "[bold]o[/bold]pen video"]
+    try:
+        for n, r in enumerate(rows, 1):
+            if not os.path.exists(r["path"]):
+                continue
+            caption = r["caption"]
+
+            def get_caption(force: bool = False):
+                nonlocal caption, ai
+                if caption and not force:
+                    return
+                try:
+                    with console.status(f"Asking {model} to describe the video..."):
+                        caption = vision.caption_video(r["path"], r["duration"], model)
+                    with conn:
+                        conn.execute("UPDATE videos SET caption = ? WHERE id = ?", (caption, r["id"]))
+                except (vision.VisionUnavailable, media.MediaToolError) as e:
+                    console.print(f"[yellow]{e}[/yellow]")
+                    if not accept_rest:
+                        ai = False   # interactive: carry on without AI. Batch: this file just gets skipped.
+
             if ai:
-                options.append("[bold]r[/bold]egenerate AI")
-            options += ["[bold]k[/bold]eep name forever", "[bold]s[/bold]kip", "[bold]q[/bold]uit", "or type a new name"]
-            keys = ", ".join(options)
-            answer = Prompt.ask(keys, default="", show_default=False).strip()
-            low = answer.lower()
-            if low == "q":
-                console.print(f"Renamed {renamed} file(s).")
-                return
-            if low == "s":
-                break
-            if low == "o":
-                open_in_viewer(r["path"])
-                continue
-            if low == "r" and ai:
-                get_caption(force=True)
-                continue
-            if low == "k":
-                with conn:
-                    conn.execute("UPDATE videos SET name_score = 100 WHERE id = ?", (r["id"],))
-                break
-            if low == "e":
-                answer = input_prefilled("Name: ", suggestion).strip()
-                if not answer:
+                get_caption()
+            while True:
+                if accept_rest:
+                    if ai_requested and not caption:   # the AI failed for this file: don't rename it without one
+                        console.print(f"[{n}/{len(rows)}] [yellow]skipped[/yellow] {r['name']} (no AI description)")
+                        skipped += 1
+                        break
+                    suggestion = names_mod.suggest_name(r, caption) + Path(r["name"]).suffix
+                    if suggestion == r["name"]:
+                        break
+                    if dry_run:
+                        console.print(f"[{n}/{len(rows)}] would rename {r['name']} → [green]{suggestion}[/green]")
+                        renamed += 1
+                        break
+                    try:
+                        new_path = names_mod.rename_video(conn, r["id"], suggestion)
+                    except (ValueError, OSError) as e:
+                        console.print(f"[{n}/{len(rows)}] [red]skipped[/red] {r['name']}: {e}")
+                        skipped += 1
+                        break
+                    console.print(f"[{n}/{len(rows)}] {r['name']} → [green]{os.path.basename(new_path)}[/green]")
+                    renamed += 1
+                    break
+
+                suggestion = names_mod.suggest_name(r, caption)
+                info = (f"[bold]{r['name']}[/bold]\n{r['dir']}\n"
+                        f"{human_date(r['created_at'], r['date_source'])} · {human_duration(r['duration'])} · {human_size(r['size'])}")
+                if caption:
+                    info += f"\nAI description: {caption}"
+                console.print(Panel(info, title=f"{n}/{len(rows)}", title_align="left"))
+                console.print(f"Suggested: [green]{suggestion}{Path(r['name']).suffix}[/green]")
+                options = ["[bold]Enter[/bold] accept", "[bold]a[/bold]ccept this and all remaining",
+                           "[bold]e[/bold]dit", "[bold]o[/bold]pen video"]
+                if ai:
+                    options.append("[bold]r[/bold]egenerate AI")
+                options += ["[bold]k[/bold]eep name forever", "[bold]s[/bold]kip", "[bold]q[/bold]uit", "or type a new name"]
+                answer = Prompt.ask(", ".join(options), default="", show_default=False).strip()
+                low = answer.lower()
+                if low == "q":
+                    summary()
+                    return
+                if low == "s":
+                    break
+                if low == "o":
+                    open_in_viewer(r["path"])
                     continue
-            new_name = answer or suggestion
-            try:
-                new_path = names_mod.rename_video(conn, r["id"], new_name)
-            except (ValueError, OSError) as e:
-                console.print(f"[red]{e}[/red]")
-                continue
-            console.print(f"  [green]renamed[/green] → {os.path.basename(new_path)}")
-            renamed += 1
-            break
-    console.print(f"[green]Done.[/green] Renamed {renamed} file(s).")
+                if low == "r" and ai:
+                    get_caption(force=True)
+                    continue
+                if low == "k":
+                    with conn:
+                        conn.execute("UPDATE videos SET name_score = 100 WHERE id = ?", (r["id"],))
+                    break
+                if low == "a":
+                    if ai_requested and not ai:
+                        console.print("[yellow]AI descriptions are unavailable, so 'accept all' is off. "
+                                      "Fix that first (or accept names one at a time).[/yellow]")
+                        continue
+                    accept_rest = True
+                    answer = ""   # accept this one now; the rest follow automatically
+                if low == "e":
+                    answer = input_prefilled("Name: ", suggestion).strip()
+                    if not answer:
+                        continue
+                new_name = answer or suggestion
+                try:
+                    new_path = names_mod.rename_video(conn, r["id"], new_name)
+                except (ValueError, OSError) as e:
+                    console.print(f"[red]{e}[/red]")
+                    continue
+                console.print(f"  [green]renamed[/green] → {os.path.basename(new_path)}")
+                renamed += 1
+                break
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted. Files renamed so far are kept.[/yellow]")
+    summary()
 
 
 @app.command("undo-rename")
-def undo_rename(ctx: typer.Context):
-    """Revert the most recent rename."""
+def undo_rename(
+    ctx: typer.Context,
+    count: Annotated[int, typer.Option("--count", "-n", min=1, help="Revert this many of the most recent renames.")] = 1,
+):
+    """Revert the most recent rename (or the last N with --count)."""
     conn = open_db(ctx)
-    try:
-        result = names_mod.undo_last_rename(conn)
-    except OSError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
-    if result is None:
-        console.print("Nothing to undo.")
-    else:
-        console.print(f"Restored {result[1]}")
+    restored = 0
+    for _ in range(count):
+        try:
+            result = names_mod.undo_last_rename(conn)
+        except OSError as e:
+            console.print(f"[red]Stopped: {e}[/red]")
+            break
+        if result is None:
+            console.print("Nothing more to undo." if restored else "Nothing to undo.")
+            break
+        restored += 1
+        console.print(f"Restored {os.path.basename(result[1])}")
+    if restored > 1:
+        console.print(f"[green]Reverted {restored} renames.[/green]")
 
 
 # --------------------------------------------------------------------------- transcode
