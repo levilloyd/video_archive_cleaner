@@ -194,7 +194,15 @@ function openModal(index) {
   const player = $("player");
   $("playerError").hidden = true;
   player.onerror = () => {
-    $("playerError").textContent = `Your browser can't play .${v.ext} files. Use "Show in Finder" or Download to open it in another app.`;
+    // MediaError codes: 1 aborted, 2 network, 3 decode, 4 format/source not supported (the spec's names, not ours).
+    const err = player.error;
+    const label = { 1: "playback was aborted", 2: "a network error", 3: "a decoding error", 4: "an unsupported format" }[err && err.code]
+      || "an unknown error";
+    const detail = err && err.message ? ` — ${err.message}` : "";
+    const cause = err && err.code === 4
+      ? `Your browser can't play .${v.ext} files.`
+      : `Playback failed: ${label}${detail}. Large files on a slow connection can do this intermittently — try again.`;
+    $("playerError").textContent = `${cause} Use "Show in Finder" or Download to open it in another app.`;
     $("playerError").hidden = false;
   };
   player.src = `/media/${v.id}#t=0.001`; // the fragment makes browsers show the first frame instead of black
