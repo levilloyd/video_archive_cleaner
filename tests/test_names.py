@@ -37,6 +37,18 @@ def test_suggest_uses_date_folder_and_caption(tmp_path):
     assert names.suggest_name(video, "Kids Building Sandcastles").endswith("- Kids Building Sandcastles")
 
 
+def test_bare_date_and_caption_are_joined_with_a_space_not_a_dash(tmp_path):
+    # No meaningful folder, a trustworthy date, and a caption: "2020-11-29 Family Cooking Fun Together",
+    # never "2020-11-29 - Family Cooking Fun Together". Three generic folders push pytest's own (descriptive-
+    # looking) tmp_path name out of the 3-level lookup, so it isn't mistaken for a real folder label.
+    video = {"path": str(tmp_path / "DCIM" / "100APPLE" / "Videos" / "clip.mov"),
+             "created_at": 1606636800, "date_source": "metadata"}
+    assert names._folder_label(Path(video["path"])) is None  # confirms the setup, not just the outcome
+    s = names.suggest_name(video, "Family Cooking Fun Together")
+    assert s == "2020-11-29 Family Cooking Fun Together"
+    assert " - " not in s
+
+
 def test_suggest_without_folder_adds_time(tmp_path):
     video = {"path": str(tmp_path / "DCIM" / "100APPLE" / "IMG_1.mov"), "created_at": 1562275930}
     s = names.suggest_name(video)
@@ -66,7 +78,7 @@ def test_suggestion_skips_home_videos_but_keeps_looking_upward(tmp_path):
     assert names.suggest_name(video, "Baby Takes First Steps") == "Baby Takes First Steps"
     assert "Home Videos" not in names.suggest_name(video)
     assert names.suggest_name({**video, "date_source": "metadata"}, "Baby Takes First Steps") == \
-        "2019-07-04 - Baby Takes First Steps"
+        "2019-07-04 Baby Takes First Steps"  # bare date + caption: a space, never "date - caption"
 
     # A generic folder is skipped, but a meaningful one further up is still found.
     deep = {"path": "/x/Isaac/Home Videos/Movies/clip.mov", "created_at": ts, "date_source": "metadata"}

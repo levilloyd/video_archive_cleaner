@@ -118,7 +118,14 @@ def suggest_name(video, caption: str | None = None) -> str:
         parts.append(folder)
     base = " ".join(parts)
     if caption:
-        base = f"{base} - {caption}" if base else caption
+        # A dash separates a folder name from the caption ("Beach Trip - Kids Building Sandcastles"), but a
+        # bare date reads better with just a space ("2019-07-04 Kids Building Sandcastles"), not "date - caption".
+        if not base:
+            base = caption
+        elif folder:
+            base = f"{base} - {caption}"
+        else:
+            base = f"{base} {caption}"
     elif not folder and source != "filename":
         base += when.strftime(" %H-%M-%S")  # nothing descriptive: keep names unique by time
     return sanitize_stem(base)
