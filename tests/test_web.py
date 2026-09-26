@@ -94,6 +94,28 @@ def test_thumbnails_served_and_lazily_created(client, tmp_path):
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
 
 
+def test_reused_id_gets_new_media_urls(client, tmp_path, library, clip_dir):
+    # SQLite hands a deleted top id to the next new file. The page puts `rev` in media and thumbnail URLs,
+    # so it must change, or the browser would play its cached copy of the old video.
+    db = tmp_path / "web.db"
+    conn = connect(db)
+    old = conn.execute("SELECT * FROM videos ORDER BY id DESC LIMIT 1").fetchone()
+    old_rev = client.get(f"/api/videos/{old['id']}").json()["rev"]
+    Path(old["path"]).unlink()
+    conn.execute("DELETE FROM videos WHERE id = ?", (old["id"],))
+    conn.commit()
+    new_file = library / "Surfing.mp4"
+    other = next(c for c in ("a.mp4", "b.mp4") if (clip_dir / c).stat().st_size != old["size"])  # a different video
+    new_file.write_bytes((clip_dir / other).read_bytes())
+    scanner.scan_files(conn, [new_file], tmp_path / "thumbs")
+    conn.close()
+
+    new = client.get(f"/api/videos/{old['id']}").json()
+    assert new["name"] == "Surfing.mp4"  # same id as the deleted video...
+    assert new["rev"] != old_rev          # ...but different URLs
+    assert client.get(f"/media/{new['id']}", params={"v": new["rev"]}).content == new_file.read_bytes()
+
+
 def test_no_arbitrary_file_access(client):
     assert client.get("/media/../../etc/passwd").status_code in (404, 422)
     assert client.get("/media/999999").status_code == 404

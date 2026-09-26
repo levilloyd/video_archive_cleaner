@@ -102,7 +102,7 @@ function renderGrid(fromIndex) {
 
 function makeCard(v, index) {
   const thumb = el("div", { class: "thumb" });
-  const img = el("img", { class: "rot", "data-rot": String(v.rotation || 0), src: `/thumb/${v.id}`, alt: "", loading: "lazy" });
+  const img = el("img", { class: "rot", "data-rot": String(v.rotation || 0), src: `/thumb/${v.id}?v=${v.rev}`, alt: "", loading: "lazy" });
   img.addEventListener("error", () => { img.remove(); thumb.prepend(el("div", { class: "noimg" }, "No preview")); });
   thumb.append(img);
   if (v.duration) thumb.append(el("span", { class: "badge" }, fmtDur(v.duration)));
@@ -205,11 +205,13 @@ function openModal(index) {
     $("playerError").textContent = `${cause} Use "Show in Finder" or Download to open it in another app.`;
     $("playerError").hidden = false;
   };
-  player.src = `/media/${v.id}#t=0.001`; // the fragment makes browsers show the first frame instead of black
+  // ?v= keeps the browser from playing a cached copy of another video that once had this id.
+  // The fragment makes browsers show the first frame instead of black.
+  player.src = `/media/${v.id}?v=${v.rev}#t=0.001`;
   applyPlayerRotation(v);
   $("nameInput").value = stem(v.name);
   $("extLabel").textContent = "." + v.ext;
-  $("download").href = `/media/${v.id}`;
+  $("download").href = `/media/${v.id}?v=${v.rev}`;
   $("download").setAttribute("download", v.name);
   renderModalTags(v);
   const meta = $("meta");

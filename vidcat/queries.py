@@ -37,6 +37,10 @@ def item_from_row(row: sqlite3.Row, tags: list[str]) -> dict:
         "id", "path", "dir", "name", "ext", "size", "created_at", "date_source", "duration", "width", "height",
         "codec", "name_score", "caption", "rotation",
     )}
+    # Changes whenever the file behind this id does: new content, or a new file given a deleted row's id
+    # (SQLite reuses the highest id). The UI puts it in media/thumbnail URLs so browsers never show a cached
+    # copy of a different video.
+    d["rev"] = f"{row['added_at']}-{row['size']}-{int(row['mtime'])}"
     d["bad_name"] = row["name_score"] < config.BAD_NAME_THRESHOLD
     d["dup_count"] = row["dup_count"]
     d["tags"] = tags
