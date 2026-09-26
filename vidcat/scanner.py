@@ -105,12 +105,22 @@ def _sync(
     stats = ScanStats()
     now = int(time.time())
     existing = {r["path"]: r for r in conn.execute("SELECT * FROM videos")}
+    found_paths = {path for path, _, _ in found}
+    by_folded: dict[str, list[sqlite3.Row]] = {}
+    for p, r in existing.items():
+        if p not in found_paths:
+            by_folded.setdefault(p.casefold(), []).append(r)
 
     todo, seen_paths = [], set()
     for path, size, mtime in found:
         seen_paths.add(path)
         row = existing.get(path)
-        if row and row["size"] == size and abs(row["mtime"] - mtime) < 1e-6 and row["date_source"] is not None:
+        if row is None:
+            row = _renamed_by_case(path, by_folded.get(path.casefold(), []))
+            if row is not None:
+                by_folded[path.casefold()].remove(row)
+        if (row and row["path"] == path and row["size"] == size and abs(row["mtime"] - mtime) < 1e-6
+                and row["date_source"] is not None):
             stats.unchanged += 1
             if row["missing"]:
                 conn.execute("UPDATE videos SET missing = 0 WHERE id = ?", (row["id"],))
@@ -143,11 +153,12 @@ def _sync(
                 content_changed = row["size"] != size or abs(row["mtime"] - mtime) >= 1e-6
                 reset = ", partial_hash=NULL, sha256=NULL" if content_changed else ""
                 # name_score is deliberately left alone unless the name changed, so "keep name forever" sticks.
+                # A change of letter case alone doesn't make a name more or less useful.
                 conn.execute(
-                    "UPDATE videos SET dir=:dir, name=:name, ext=:ext, size=:size, mtime=:mtime, "
+                    "UPDATE videos SET path=:path, dir=:dir, name=:name, ext=:ext, size=:size, mtime=:mtime, "
                     "created_at=:created_at, date_source=:date_source, duration=:duration, width=:width, "
                     "height=:height, codec=:codec, missing=0, scanned_at=:scanned_at"
-                    + (", name_score=:name_score" if content_changed or row["name"] != name else "")
+                    + (", name_score=:name_score" if content_changed or row["name"].casefold() != name.casefold() else "")
                     + reset + " WHERE id=:id",
                     {**values, "id": row["id"]},
                 )
@@ -189,6 +200,33 @@ def _sync(
                 report("Making thumbnails", i, len(thumb_jobs))
                 stats.thumbnails += bool(ok)
     return stats
+
+
+def _renamed_by_case(path: str, candidates: list[sqlite3.Row]) -> sqlite3.Row | None:
+    """The catalog row for `path` under its old spelling, if the file (or a folder above it) was renamed
+    only in letter case.
+
+    On a case-insensitive volume (the macOS default, and most NAS shares) the old spelling still "exists",
+    so without this the file would get a second row and the old one would never be marked missing.
+    `candidates` are rows whose path matches `path` ignoring case. One only counts when it is the same file
+    and its old spelling is no longer listed on disk; on a case-sensitive volume `clip.mp4` and `Clip.mp4`
+    can be two different files, or hard links to one.
+    """
+    new_parts = Path(path).parts
+    for row in candidates:
+        old_parts = Path(row["path"]).parts
+        if len(old_parts) != len(new_parts):
+            continue
+        try:
+            still_listed = any(
+                old != new and old in os.listdir(os.path.join(*old_parts[:i]))
+                for i, (old, new) in enumerate(zip(old_parts, new_parts)) if i
+            )
+            if not still_listed and os.path.samefile(row["path"], path):
+                return row
+        except OSError:
+            continue
+    return None
 
 
 def _reconcile_moves(conn: sqlite3.Connection, new_rows: list[dict]) -> int:

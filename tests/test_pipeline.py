@@ -44,6 +44,37 @@ def test_scan_marks_missing_and_detects_moves(conn, library, thumbs):
     assert queries.search_videos(conn)["total"] == 2
 
 
+def case_insensitive(folder: Path) -> bool:
+    probe = folder / "CaseProbe"
+    probe.touch()
+    try:
+        return (folder / "caseprobe").exists()
+    finally:
+        probe.unlink()
+
+
+def test_case_only_rename_keeps_one_row(conn, library, thumbs):
+    if not case_insensitive(library):
+        pytest.skip("needs a case-insensitive volume (the macOS default, like most NAS shares)")
+    do_scan(conn, library, thumbs)
+    row = conn.execute("SELECT * FROM videos WHERE name = 'MVI_0002.mp4'").fetchone()
+    tags.add_tags(conn, row["id"], ["family"])
+
+    sub = library / "Summer Trip" / "sub"
+    os.rename(sub / "MVI_0002.mp4", sub / "mvi_0002.mp4")   # file renamed, only the case changes
+    os.rename(library / "Summer Trip", library / "summer trip")  # ...and a folder above it too
+    s = do_scan(conn, library, thumbs)
+    assert (s.added, s.updated, s.missing, s.moved) == (0, 3, 0, 0)  # the folder holds all 3 videos
+
+    rows = conn.execute("SELECT * FROM videos WHERE name LIKE 'mvi_0002.mp4'").fetchall()
+    assert len(rows) == 1 and rows[0]["id"] == row["id"]
+    assert rows[0]["path"].endswith("summer trip/sub/mvi_0002.mp4") and rows[0]["name"] == "mvi_0002.mp4"
+    assert rows[0]["name_score"] == row["name_score"]
+    assert tags.tags_for(conn, [row["id"]])[row["id"]] == ["family"]
+    assert queries.search_videos(conn)["total"] == 3
+    assert do_scan(conn, library, thumbs).unchanged == 3
+
+
 def test_rotation_survives_rescan_change_and_move(conn, library, thumbs):
     do_scan(conn, library, thumbs)
     row = conn.execute("SELECT * FROM videos WHERE name = 'MVI_0002.mp4'").fetchone()
